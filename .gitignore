@@ -1,0 +1,53 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---- Entornos virtuales ----
+env/
+venv/
+.venv/
+ENV/
+env/*
+# ---- Variables de entorno (config local; ver .env.example) ----
+
+
+# ---- Salidas de entrenamiento ----
+models/
+tensorboard/
+runs/
+*.zip
+*.pkl
+*.pt
+*.pth
+vecnormalize.pkl
+
+# ---- Webots (archivos autogenerados por usuario/proyecto) ----
+worlds/.*.wbproj
+worlds/.*.jpg
+worlds/*.wbproj
+*.wbproj
+worlds/.backup/
+.webots/
+
+# ---- IDE / editor ----
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ---- Config local de Claude Code ----
+.claude/settings.local.json
+
+# ---- Sistema operativo ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -- Imagenes y videos --
+*.jpg
+*.png
+*.avi
