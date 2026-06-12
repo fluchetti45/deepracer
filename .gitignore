@@ -46,8 +46,3 @@ worlds/.backup/
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# -- Imagenes y videos --
-*.jpg
-*.png
-*.avi

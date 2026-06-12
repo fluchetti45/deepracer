@@ -8,9 +8,15 @@ import numpy as np
 from controller import Robot
 from helpers.read_env_value import read_env_value
 
-MOTOR_SPEED_MARGIN = 0.8
 HEADER_FMT = read_env_value("ROBOT_PACKET_HEADER_FORMAT", "!I", str)
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
+
+# Mapeo de accion por rueda: [-1, 1] -> [WHEEL_MIN_SPEED, WHEEL_MAX_SPEED] rad/s.
+# Ambas POSITIVAS: el robot NUNCA retrocede ni frena del todo (estilo DeepRacer).
+#   accion -1 -> WHEEL_MIN_SPEED (velocidad minima),  +1 -> WHEEL_MAX_SPEED.
+# WHEEL_MAX_SPEED queda clampeado por la maxVelocity del motor en el .wbt (6.28).
+WHEEL_MIN_SPEED = read_env_value("WHEEL_MIN_SPEED", 0.75, float)  # rad/s
+WHEEL_MAX_SPEED = read_env_value("WHEEL_MAX_SPEED", 5.0, float)   # rad/s
 
 
 class EpuckController:
@@ -27,11 +33,6 @@ class EpuckController:
         self.right_motor.setPosition(float("inf"))
         self.left_motor.setVelocity(0.0)
         self.right_motor.setVelocity(0.0)
-
-        self.max_speed = (
-            min(self.left_motor.getMaxVelocity(), self.right_motor.getMaxVelocity())
-            * MOTOR_SPEED_MARGIN
-        )
 
         self.left_encoder = self.robot.getDevice("left wheel sensor")
         self.right_encoder = self.robot.getDevice("right wheel sensor")
@@ -66,11 +67,14 @@ class EpuckController:
     # ------------------------------------------------------------------
 
     def _apply_action(self, action: list):
-        # La accion llega NORMALIZADA en [-1, 1] (fraccion de la velocidad maxima).
-        # Se la escala a rad/s reales con max_speed (que ya incluye el margen
-        # MOTOR_SPEED_MARGIN sobre la maxVelocity del motor).
-        left  = float(np.clip(action[0], -1.0, 1.0)) * self.max_speed
-        right = float(np.clip(action[1], -1.0, 1.0)) * self.max_speed
+        # La accion llega NORMALIZADA en [-1, 1] por rueda. Se remapea a
+        # [WHEEL_MIN_SPEED, WHEEL_MAX_SPEED] (ambas positivas): -1 -> minima,
+        # +1 -> maxima. Asi el robot nunca retrocede ni frena del todo.
+        left_n  = float(np.clip(action[0], -1.0, 1.0))
+        right_n = float(np.clip(action[1], -1.0, 1.0))
+        span = WHEEL_MAX_SPEED - WHEEL_MIN_SPEED
+        left  = WHEEL_MIN_SPEED + (left_n  + 1.0) * 0.5 * span
+        right = WHEEL_MIN_SPEED + (right_n + 1.0) * 0.5 * span
         self.left_motor.setVelocity(left)
         self.right_motor.setVelocity(right)
 

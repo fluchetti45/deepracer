@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Supervisor Controls</title>
+    <link rel="stylesheet" href="supervisor_window.css" />
+    <script type="module" src="supervisor_window.js"></script>
+  </head>
+  <body>
+    <div class="layout">
+      <section class="card">
+        <h1>Supervisor Control Panel</h1>
+        <p>
+          Envia acciones manuales desde la Robot Window del supervisor hacia el
+          e-puck y muestra el estado de la navegacion en tiempo real.
+        </p>
+        <div class="button-grid">
+          <button id="forward">Avanzar</button>
+          <button id="left">Doblar Izquierda</button>
+          <button id="right">Doblar Derecha</button>
+          <button id="backward" class="secondary">Retroceder</button>
+          <button id="reset-pose" class="secondary">Resetear Pose</button>
+          <button id="stop" class="danger">Frenar</button>
+        </div>
+        <div class="button-grid">
+          <button id="refresh-state" class="secondary">
+            Actualizar Estado
+          </button>
+          <button id="capture-frame" class="secondary">Capturar Camara</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Control de Policy</h2>
+        <p>Carga, activa y desactiva la politica entrenada del robot.</p>
+        <div class="button-grid">
+          <button id="select-policy-model" class="secondary">
+            Seleccionar Modelo PPO
+          </button>
+          <button id="load-policy-from-path">Cargar Ruta Escrita</button>
+          <button id="enable-policy">Activar Politica</button>
+          <button id="disable-policy" class="secondary">
+            Desactivar Politica
+          </button>
+          <button id="unload-policy" class="secondary">
+            Descargar Politica
+          </button>
+        </div>
+        <label
+          for="policy-deterministic"
+          style="display: flex; align-items: center; gap: 8px; margin-top: 12px">
+          <input type="checkbox" id="policy-deterministic" checked />
+          <span
+            >Deterministica (sin ruido). Destildar = estocastica (samplea con
+            ruido de exploracion).</span
+          >
+        </label>
+        <div id="policy-banner" class="policy-banner idle">
+          <strong id="policy-banner-title">Sin politica cargada</strong>
+          <p id="policy-banner-description">
+            Selecciona un modelo para poder activarlo.
+          </p>
+        </div>
+        <input
+          id="policy-model-file"
+          type="file"
+          accept=".zip,application/zip"
+          style="display: none" />
+        <div class="status-grid" style="margin-top: 14px">
+          <div class="status-row">
+            <span class="label">Ruta del Modelo a Cargar</span>
+            <input
+              id="policy-model-path"
+              type="text"
+              placeholder="models/20260507132630/final_model.zip" />
+          </div>
+        </div>
+        <div class="status-grid" style="margin-top: 14px">
+          <div class="status-row">
+            <span class="label">Modelo Seleccionado</span>
+            <code id="policy-model-selected"
+              >Todavia no se selecciono un archivo.</code
+            >
+          </div>
+          <div class="status-row">
+            <span class="label">Modelo Cargado en el Robot</span>
+            <code id="policy-model-current">Ningun modelo cargado.</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Camara de Debug</h2>
+        <div class="camera-panel">
+          <canvas id="camera-frame" class="camera-canvas"></canvas>
+          <div class="status-row">
+            <span class="label">Frame</span>
+            <code id="camera-placeholder"
+              >Todavia no hay imagen del robot.</code
+            >
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Snapshot de Policy</h2>
+        <p>
+          Captura la observacion actual del robot para debuggear la politica:
+          estado de ruedas, direccion al objetivo y accion predicha.
+        </p>
+        <div class="button-grid" style="margin-top: 14px">
+          <button id="request-policy-debug" class="secondary">
+            Capturar Snapshot de Policy
+          </button>
+        </div>
+        <div class="camera-panel" style="margin-top: 14px">
+          <canvas id="policy-full-frame" class="camera-canvas"></canvas>
+          <div class="status-row">
+            <span class="label">Imagen actual</span>
+            <code id="policy-full-placeholder"
+              >Todavia no hay imagen actual.</code
+            >
+          </div>
+        </div>
+        <div class="status-grid" style="margin-top: 14px">
+          <div class="status-row">
+            <span class="label">Resumen del snapshot</span>
+            <code id="policy-debug-summary"
+              >Todavia no hay snapshot de policy.</code
+            >
+          </div>
+          <div class="status-row">
+            <span class="label">Metricas de navegacion</span>
+            <div id="policy-debug-nav-metrics" class="kv-list">
+              <code>Todavia no hay metricas de navegacion.</code>
+            </div>
+          </div>
+          <div class="status-row">
+            <span class="label">Metricas de reward</span>
+            <div id="policy-debug-reward-metrics" class="kv-list">
+              <code>Todavia no hay metricas de reward.</code>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Estado</h2>
+        <div class="status-grid">
+          <div class="status-row">
+            <span class="label">Supervisor</span>
+            <code id="status-text">Esperando estado...</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Ultima Accion</span>
+            <code id="last-action">idle</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Step Count</span>
+            <code id="step-count">0</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Episode Id</span>
+            <code id="episode-id">0</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Episode Step</span>
+            <code id="episode-step">0</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Training Client</span>
+            <code id="training-client">Sin cliente</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Distancia al Objetivo</span>
+            <code id="distance-to-goal">N/A</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Goal Direction [forward, lateral]</span>
+            <code id="goal-dir">N/A</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Posicion Robot [x, y]</span>
+            <code id="robot-pos">N/A</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Posicion Objetivo [x, y]</span>
+            <code id="target-pos">N/A</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Ultimo Mensaje del Robot</span>
+            <code id="last-robot-message">Sin mensajes.</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Politica</span>
+            <code id="policy-status">Sin politica cargada.</code>
+          </div>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>
