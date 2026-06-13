@@ -18,7 +18,7 @@ TexturedBackgroundLight {
 DEF ARENA RectangleArena {
   floorSize 8 8
   floorAppearance Appearance {
-    texture ImageTexture {
+    texture DEF FLOOR_TEX ImageTexture {
       url [
         "track1.png"
       ]

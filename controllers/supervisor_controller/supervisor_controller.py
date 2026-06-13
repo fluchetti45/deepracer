@@ -17,10 +17,18 @@ from helpers.image_obs import blank_image_payload
 from helpers.lane_vision import decode_rgb_hwc, detect_lane
 
 
-DOMAIN_RANDOMIZATION_ENABLED = True
-DOMAIN_RANDOMIZATION_PROBABILITY = 0.5
-DOMAIN_RANDOMIZATION_MAX_ROTATION=math.radians(30)  # perturbacion de hasta +/-30 grados
-DOMAIN_RANDOMIZATION_MAX_TRANSLATION=0.05  # perturbacion de hasta +/-5 cm
+# Domain randomization de la pose del robot al inicio de cada episodio: jitter de
+# rotacion/traslacion SOBRE el spawn elegido, para mejorar la generalizacion.
+# Activado por defecto; todo configurable por .env.
+DOMAIN_RANDOMIZATION_ENABLED = bool(read_env_value("DOMAIN_RANDOMIZATION_ENABLED", 1, int))
+# Probabilidad de aplicar el jitter en un episodio dado.
+DOMAIN_RANDOMIZATION_PROBABILITY = read_env_value("DOMAIN_RANDOMIZATION_PROBABILITY", 0.5)
+# Perturbacion maxima de rotacion (en GRADOS, +/-) — se convierte a radianes.
+DOMAIN_RANDOMIZATION_MAX_ROTATION = math.radians(
+    read_env_value("DOMAIN_RANDOMIZATION_MAX_ROTATION_DEG", 15.0)
+)
+# Perturbacion maxima de traslacion en x e y (en METROS, +/-).
+DOMAIN_RANDOMIZATION_MAX_TRANSLATION = read_env_value("DOMAIN_RANDOMIZATION_MAX_TRANSLATION", 0.02)
 
 # ----------------------------------------------------------------------------
 # Constantes por defecto.
@@ -39,8 +47,10 @@ ACTION_REPEAT = read_env_value("ACTION_REPEAT", 5)
 UI_HEARTBEAT_PERIOD = read_env_value("UI_HEARTBEAT_PERIOD", 200)
 # Bonus terminal al alcanzar el target.
 ARRIVAL_BONUS = read_env_value("ARRIVAL_BONUS", 1.0)
-# Velocidades maximas (para normalizar la observacion de velocidad a ~[-1, 1]).
-MAX_LINEAR_SPEED = read_env_value("MAX_LINEAR_SPEED", 1.0)
+# Velocidades maximas REALES (para normalizar la velocidad a ~[-1, 1]). Es el
+# DIVISOR de normalizacion: debe ser ~la vmax real del robot para que "a fondo"
+# mapee a ~1.0. e-puck: WHEEL_MAX_SPEED * radio_rueda = 5.0 * 0.02 = 0.1 m/s.
+MAX_LINEAR_SPEED = read_env_value("MAX_LINEAR_SPEED", 0.1)
 MAX_ANGULAR_SPEED = read_env_value("MAX_ANGULAR_SPEED", 2.0 * math.pi)
 # Radio por defecto del target cuando no se puede resolver del nodo.
 TARGET_DEFAULT_RADIUS = read_env_value("TARGET_DEFAULT_RADIUS", 0.05)
@@ -57,16 +67,22 @@ COLOR_NAMES = ("red", "green", "blue", "yellow")
 # Pesos y umbrales tuneables por .env. El detector de carril vive en
 # helpers/lane_vision; aca solo se componen los terminos del reward.
 # ----------------------------------------------------------------------------
-# Centrado: premia que la banda central de la vista sea asfalto limpio (~1 centrado).
-REWARD_CENTER_W = read_env_value("REWARD_CENTER_W", 1.0)
+# Estructura: reward = clearance * (REWARD_BASE + REWARD_SPEED_W * speed) + penas.
+# La velocidad es el termino PRINCIPAL y el centrado (clearance) es un GATE que
+# multiplica todo: solo se cobra fuerte yendo RAPIDO y CENTRADO. Como el robot ya
+# no puede frenar ni retroceder, "rapido + centrado" == "recorrer la pista rapido".
+# Base por ir en el carril (multiplicada por clearance): mantiene el reward NETO
+# POSITIVO portandose bien, asi salirse (terminal -1) nunca es "conveniente".
+REWARD_BASE = read_env_value("REWARD_BASE", 0.1)
+# Velocidad: termino principal. speed_norm en ~[0.15, 1.0] (ver MAX_LINEAR_SPEED).
+REWARD_SPEED_W = read_env_value("REWARD_SPEED_W", 1.0)
 # Direccion: penaliza el offset lateral firmado (rompe la simetria del centrado).
 REWARD_OFFSET_W = read_env_value("REWARD_OFFSET_W", 0.3)
 # Borde: penaliza tener blanco (linea externa) en la banda central.
 REWARD_WHITE_W = read_env_value("REWARD_WHITE_W", 0.5)
-# Velocidad: premia avanzar, pero SOLO si va centrado (speed * clearance).
-REWARD_SPEED_W = read_env_value("REWARD_SPEED_W", 0.3)
-# Costo por step: empuja a no quedarse quieto.
-REWARD_STEP_COST = read_env_value("REWARD_STEP_COST", 0.01)
+# Costo por step. OFF por defecto: el robot ya no puede quedarse quieto, asi que
+# no hace falta, y en neto negativo incentivaria chocar para terminar el episodio.
+REWARD_STEP_COST = read_env_value("REWARD_STEP_COST", 0.0)
 # Off-track: fraccion de pasto en la banda central para declarar que se fue.
 OFFTRACK_GREEN_FRAC = read_env_value("OFFTRACK_GREEN_FRAC", 0.4)
 # Reward terminal al salirse de la pista.
@@ -102,6 +118,12 @@ class SupervisorController:
         self.supervisor.simulationSetMode(Supervisor.SIMULATION_MODE_FAST)
         # DEFINICION DE LOS ELEMENTOS DEL AMBIENTE
         self.arena_node = self.supervisor.getFromDef("ARENA")
+        # Textura del piso (DEF FLOOR_TEX en el .wbt): se swapea por episodio para
+        # entrenar en distintos tracks. None si el .wbt no tiene el DEF (no swapea).
+        self.floor_texture_node = self.supervisor.getFromDef("FLOOR_TEX")
+        self.floor_texture_url_field = (
+            self.floor_texture_node.getField("url") if self.floor_texture_node else None
+        )
         # DEFINICION DEL ROBOT E-PUCK
         self.epuck_robot = self.supervisor.getFromDef("EPUCK")
         self.epuck_translation_field = self.epuck_robot.getField("translation")
@@ -122,6 +144,10 @@ class SupervisorController:
         self.policy_status = self.policy_runner.status_dict()
         self.policy_debug_snapshot = None
         self.reset_rng = np.random.default_rng()
+        # Mapa track->spawns (spawns.json). None => textura/pose por defecto del .wbt.
+        self.track_spawns = self._load_track_spawns()
+        # Track del episodio en curso (para metricas/telemetria). None = default del .wbt.
+        self.current_track_texture = None
         self.current_map_config = None
         self.current_spawn_pose_index = None
         self.episodes_on_current_map = 0
@@ -237,9 +263,10 @@ class SupervisorController:
             float(current_translation[1] + random_translation_y),
             float(current_translation[2]),  # Z no se modifica
         ]
-        # Aplicar la nueva pose
+        # Aplicar la nueva pose y resetear la fisica (que no arrastre estado del jitter).
         self.epuck_translation_field.setSFVec3f(perturbed_translation)
         self.epuck_rotation_field.setSFRotation(perturbed_rotation)
+        self.epuck_robot.resetPhysics()
 
     def _configure_episode_start(self, seed=None, options=None):
         """
@@ -610,9 +637,104 @@ class SupervisorController:
         self.policy_status = self.policy_runner.status_dict()
         self.last_action_label = "policy_paused_for_training"
 
+    def _load_track_spawns(self):
+        """
+        Carga el mapa track->spawns (spawns.json en PROJECT_ROOT, o ruta en la env
+        SPAWNS_JSON). Formato:
+            {
+              "tracks": [
+                {
+                  "texture": "track1.png",
+                  "spawns": [
+                    {"translation": [x, y, z], "rotation": [x, y, z, angle]},
+                    ...
+                  ]
+                },
+                ...
+              ]
+            }
+        Devuelve la lista de tracks validos (cada uno con >=1 spawn), o None si no
+        existe / es invalido / esta vacio. En ese caso el reset usa la textura y la
+        pose por defecto del .wbt (comportamiento de un solo track).
+        """
+        path = os.environ.get("SPAWNS_JSON") or os.path.join(PROJECT_ROOT, "spawns.json")
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError) as exc:
+            log_supervisor(
+                f"[Supervisor] spawns.json no cargado ({exc}); track/pose por defecto.",
+                force=True,
+            )
+            return None
+
+        worlds_dir = os.path.join(PROJECT_ROOT, "worlds")
+        tracks = data.get("tracks") if isinstance(data, dict) else None
+        valid = []
+        for track in tracks or []:
+            texture = track.get("texture") if isinstance(track, dict) else None
+            spawns = [s for s in track.get("spawns", []) if self._valid_spawn(s)]
+            if not (isinstance(texture, str) and texture and spawns):
+                continue
+            # El PNG debe existir en worlds/ (si no, en headless entrenarias contra
+            # una pista negra sin enterarte). Tracks sin textura presente se ignoran.
+            if not os.path.exists(os.path.join(worlds_dir, texture)):
+                log_supervisor(
+                    f"[Supervisor] track '{texture}' no existe en worlds/; se ignora.",
+                    force=True,
+                )
+                continue
+            valid.append({"texture": texture, "spawns": spawns})
+        if not valid:
+            log_supervisor(
+                "[Supervisor] spawns.json sin tracks validos; track/pose por defecto.",
+                force=True,
+            )
+            return None
+        total_spawns = sum(len(t["spawns"]) for t in valid)
+        log_supervisor(
+            f"[Supervisor] spawns.json: {len(valid)} tracks, {total_spawns} spawns.",
+            force=True,
+        )
+        return valid
+
+    @staticmethod
+    def _valid_spawn(spawn):
+        """Un spawn valido = {translation:[x,y,z], rotation:[x,y,z,angle]}."""
+        if not isinstance(spawn, dict):
+            return False
+        translation = spawn.get("translation")
+        rotation = spawn.get("rotation")
+        return (
+            isinstance(translation, list) and len(translation) == 3
+            and isinstance(rotation, list) and len(rotation) == 4
+        )
+
+    def _select_random_track_spawn(self):
+        """
+        Elige un track random y un spawn random de ese track, setea la textura del
+        piso y devuelve (translation, rotation) del spawn. Si no hay spawns.json (o
+        el .wbt no tiene DEF FLOOR_TEX) devuelve (None, None): el caller usa la pose
+        inicial y no cambia la textura.
+        """
+        if not self.track_spawns:
+            return None, None
+        track = self.track_spawns[int(self.reset_rng.integers(len(self.track_spawns)))]
+        spawn = track["spawns"][int(self.reset_rng.integers(len(track["spawns"])))]
+        if self.floor_texture_url_field is not None:
+            self.floor_texture_url_field.setMFString(0, track["texture"])
+        self.current_track_texture = track["texture"]
+        log_supervisor(f"[Supervisor] episodio {self.episode_id + 1} en track '{track['texture']}'")
+        return list(spawn["translation"]), list(spawn["rotation"])
+
     def _handle_reset_env_request(self, request, request_id):
         self._request_robot("reset_robot", "reset_done")
-        self._reset_robot_pose()
+        # Nuevo episodio: track + spawn random (si hay spawns.json). Se setea la
+        # textura ANTES del settle para que la imagen post-reset ya sea del track nuevo.
+        translation, rotation = self._select_random_track_spawn()
+        self._reset_robot_pose(translation=translation, rotation=rotation)
+        # Jitter de pose SOBRE el spawn elegido (si DR esta activo).
+        self._apply_domain_randomization()
         self._advance_simulation(RESET_SETTLE_STEPS)
         self._refresh_robot_observation()
         self.episode_id += 1
@@ -625,7 +747,7 @@ class SupervisorController:
             "type": "env_reset",
             "request_id": request_id,
             "observation": self._build_nav_observation(),
-            "info": {},
+            "info": {"track": self.current_track_texture},
         }
 
     def _lane_features(self):
@@ -676,23 +798,26 @@ class SupervisorController:
                 term_reason="offtrack_grass",
                 clearance=clearance,
                 offset=offset,
+                speed=speed_fwd,
                 green_center=green_center,
                 white_center=white_center,
                 line_visible=line_visible,
             )
 
-        # --- Reward denso por componentes. ---
-        r_center = REWARD_CENTER_W * clearance
+        # --- Reward denso: ir RAPIDO mientras se mantiene CENTRADO. ---
+        # clearance (1 centrado, 0 al borde/pasto) es un GATE que multiplica la
+        # base + la velocidad: crawlear centrado da poco, solo se cobra fuerte
+        # yendo rapido y centrado. Las penas (blanco/offset) se restan aparte.
+        r_drive = clearance * (REWARD_BASE + REWARD_SPEED_W * speed_fwd)
         r_offset = -REWARD_OFFSET_W * abs(offset) if offset is not None else 0.0
         r_white = -REWARD_WHITE_W * white_center
-        r_speed = REWARD_SPEED_W * speed_fwd * clearance
         r_lost = LINE_LOST_PENALTY if (has_features and not line_visible) else 0.0
         r_step = -REWARD_STEP_COST
-        # Sin features (imagen invalida) no premiamos ni penalizamos el centrado.
+        # Sin features (imagen invalida) no premiamos ni penalizamos.
         if not has_features:
-            r_center = r_offset = r_white = r_speed = r_lost = 0.0
+            r_drive = r_offset = r_white = r_lost = 0.0
 
-        reward = r_center + r_offset + r_white + r_speed + r_lost + r_step
+        reward = r_drive + r_offset + r_white + r_lost + r_step
 
         return self._reward_dict(
             reward=float(reward),
@@ -700,22 +825,22 @@ class SupervisorController:
             term_reason=None,
             clearance=clearance,
             offset=offset,
+            speed=speed_fwd,
             green_center=green_center,
             white_center=white_center,
             line_visible=line_visible,
-            r_center=r_center,
+            r_drive=r_drive,
             r_offset=r_offset,
             r_white=r_white,
-            r_speed=r_speed,
             r_lost=r_lost,
             r_step=r_step,
         )
 
     @staticmethod
     def _reward_dict(reward, terminated, term_reason, clearance, offset,
-                     green_center, white_center, line_visible,
-                     r_center=0.0, r_offset=0.0, r_white=0.0,
-                     r_speed=0.0, r_lost=0.0, r_step=0.0):
+                     green_center, white_center, line_visible, speed=0.0,
+                     r_drive=0.0, r_offset=0.0, r_white=0.0,
+                     r_lost=0.0, r_step=0.0):
         """Estructura uniforme del desglose de reward (misma forma siempre)."""
         return {
             "reward": round(float(reward), 4),
@@ -724,14 +849,14 @@ class SupervisorController:
             # Features observadas
             "center_clearance": round(clearance, 4),
             "offset": round(offset, 4) if offset is not None else None,
+            "speed": round(speed, 4),
             "green_center": round(green_center, 4),
             "white_center": round(white_center, 4),
             "line_visible": bool(line_visible),
             # Terminos del reward
-            "r_center": round(r_center, 4),
+            "r_drive": round(r_drive, 4),
             "r_offset": round(r_offset, 4),
             "r_white": round(r_white, 4),
-            "r_speed": round(r_speed, 4),
             "r_lost": round(r_lost, 4),
             "r_step": round(r_step, 4),
         }
@@ -770,6 +895,7 @@ class SupervisorController:
                 "reward_breakdown": breakdown,
                 "episode_step": self.episode_step,
                 "lost_line_steps": self.lost_line_steps,
+                "track": self.current_track_texture,
             },
         }
 

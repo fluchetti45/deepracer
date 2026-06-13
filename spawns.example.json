@@ -1,0 +1,18 @@
+{
+  "_comment": "Copiar a spawns.json y editar. El supervisor elige, por episodio, un track random y un spawn random de ese track; swapea la textura del piso (DEF FLOOR_TEX) y reposiciona el robot. 'texture' = nombre del PNG en worlds/. 'translation' = [x, y, z] (z = altura de reposo del robot). 'rotation' = [x, y, z, angulo_rad]. Si este archivo no existe, se usa el track/pose por defecto del .wbt.",
+  "tracks": [
+    {
+      "texture": "track1.png",
+      "spawns": [
+        {"translation": [0, 1.83, 0], "rotation": [0, 0, 1, 0]},
+        {"translation": [-1.2, 0.5, 0], "rotation": [0, 0, 1, 1.5708]}
+      ]
+    },
+    {
+      "texture": "track2.png",
+      "spawns": [
+        {"translation": [0.0, -1.5, 0], "rotation": [0, 0, 1, 3.1416]}
+      ]
+    }
+  ]
+}
