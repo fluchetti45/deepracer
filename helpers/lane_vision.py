@@ -1,21 +1,22 @@
 """
-Deteccion de carril vision-pura para el reward del supervisor.
+Deteccion de PISTA vision-pura para el reward del supervisor.
 
-La idea (opcion A): el reward se computa desde la MISMA imagen de camara frontal
-que va en la observacion. No hay waypoints ni geometria de la pista: solo se
-clasifican pixeles por color en la franja inferior del frame (la pista cercana) y
-se derivan un par de escalares:
+Modelo DeepRacer: la pista es TODA la calzada entre los bordes blancos (no hay
+sub-carril que respetar; la linea amarilla es solo decorativa y se puede pisar).
+El reward se computa desde la MISMA imagen de camara frontal que va en la obs. No
+hay waypoints ni geometria: se clasifican pixeles por color en la franja inferior
+del frame y se derivan un par de escalares:
 
-  - center_clearance : que tan "limpia" (asfalto, sin marcas ni pasto) esta la
-                       banda central de la vista -> ~1 cuando el robot esta
-                       centrado en su carril, baja al acercarse a un borde.
-  - offset           : desplazamiento lateral firmado del centro del carril
-                       (punto medio entre la linea amarilla y la blanca) respecto
-                       al centro de la imagen. Da la DIRECCION de correccion.
+  - road = asfalto + amarillo = todo lo que NO es borde blanco ni pasto verde.
+  - center_clearance : fraccion de CALZADA en la banda central de la vista (~1
+                       cuando la pista llena el centro, baja al acercarse a un borde
+                       o al pasto). NO penaliza la linea amarilla.
+  - offset           : desplazamiento firmado del centroide de la CALZADA respecto
+                       al centro de la imagen -> hacia donde dobla la pista (steer).
   - green_center     : fraccion de pasto en la banda central -> se fue de la pista.
-  - white_center     : fraccion de blanco en la banda central -> pisando el borde.
+  - white_center     : fraccion de blanco (borde) en la banda central -> pisando el borde.
 
-Todo en numpy puro (los frames son chicos, ~52x39); sin dependencia de OpenCV.
+Todo en numpy puro (frames chicos); sin dependencia de OpenCV.
 Convencion de imagen: igual que helpers/image_obs -> RGB, layout HWC, uint8.
 """
 
@@ -25,15 +26,12 @@ from helpers.read_env_value import read_env_value
 
 # Franja inferior del frame que se analiza (saltea cielo/horizonte/montanias).
 ROI_TOP_FRAC = read_env_value("LANE_ROI_TOP_FRAC", 0.45)
-# Ancho (fraccion) de la banda central de columnas que deberia estar limpia
-# (asfalto) cuando el robot va centrado en su carril.
+# Ancho (fraccion) de la banda central de columnas que deberia ser calzada cuando
+# el robot va bien encarado sobre la pista.
 CENTER_BAND_FRAC = read_env_value("LANE_CENTER_BAND_FRAC", 0.34)
 
-# Umbrales de color RGB (0-255). Pensados para: amarillo (linea central),
-# blanco (borde externo), verde (pasto = fuera de pista).
-YELLOW_R_MIN = read_env_value("LANE_YELLOW_R_MIN", 120, int)
-YELLOW_G_MIN = read_env_value("LANE_YELLOW_G_MIN", 120, int)
-YELLOW_B_MAX = read_env_value("LANE_YELLOW_B_MAX", 100, int)
+# Umbrales de color RGB (0-255). Solo necesitamos distinguir borde blanco y pasto
+# verde; el resto (asfalto gris + linea amarilla) es calzada drivable.
 WHITE_MIN = read_env_value("LANE_WHITE_MIN", 175, int)
 GREEN_G_MIN = read_env_value("LANE_GREEN_G_MIN", 60, int)
 GREEN_MARGIN = read_env_value("LANE_GREEN_MARGIN", 25, int)
@@ -61,15 +59,14 @@ def decode_rgb_hwc(image_payload):
     return np.frombuffer(buffer, dtype=np.uint8).reshape(height, width, 3)
 
 
-def _color_masks(rgb):
-    """Mascaras booleanas (amarillo, blanco, verde) sobre una imagen RGB HWC."""
+def _edge_masks(rgb):
+    """Mascaras booleanas (blanco=borde, verde=pasto) sobre una imagen RGB HWC."""
     r = rgb[:, :, 0].astype(np.int16)
     g = rgb[:, :, 1].astype(np.int16)
     b = rgb[:, :, 2].astype(np.int16)
-    yellow = (r >= YELLOW_R_MIN) & (g >= YELLOW_G_MIN) & (b <= YELLOW_B_MAX)
     white = (r >= WHITE_MIN) & (g >= WHITE_MIN) & (b >= WHITE_MIN)
     green = (g >= GREEN_G_MIN) & (g - r >= GREEN_MARGIN) & (g - b >= GREEN_MARGIN)
-    return yellow, white, green
+    return white, green
 
 
 def _centroid_col(mask, width):
@@ -83,54 +80,52 @@ def _centroid_col(mask, width):
 
 def detect_lane(rgb):
     """
-    Extrae las features de carril de un frame RGB HWC. Ver el docstring del modulo
-    para el significado de cada campo. Nunca lanza: si algo falla devuelve features
-    neutras (line_visible=False).
+    Extrae las features de PISTA de un frame RGB HWC (ver docstring del modulo).
+    road = ~(blanco | verde) = asfalto + amarillo = calzada drivable.
+    Nunca lanza: si algo falla devuelve features neutras (line_visible=False).
     """
     height, width, _ = rgb.shape
     top = int(ROI_TOP_FRAC * height)
     top = min(max(top, 0), max(height - 1, 0))
     roi = rgb[top:, :, :]
-    yellow, white, green = _color_masks(roi)
+    white, green = _edge_masks(roi)
+    road = ~(white | green)  # asfalto + amarillo = calzada
 
-    roi_h, roi_w = yellow.shape
+    roi_h, roi_w = white.shape
     roi_area = float(roi_h * roi_w) or 1.0
-    yellow_frac = float(yellow.sum()) / roi_area
+    road_frac = float(road.sum()) / roi_area
     white_frac = float(white.sum()) / roi_area
     green_frac = float(green.sum()) / roi_area
 
-    # Banda central de columnas.
+    # Banda central de columnas: cuanto del centro de la vista es calzada.
     band = max(1, int(CENTER_BAND_FRAC * roi_w))
     c0 = (roi_w - band) // 2
     c1 = c0 + band
     band_area = float(roi_h * band) or 1.0
-    center_yellow = float(yellow[:, c0:c1].sum()) / band_area
     center_white = float(white[:, c0:c1].sum()) / band_area
     center_green = float(green[:, c0:c1].sum()) / band_area
-    center_clearance = max(0.0, 1.0 - (center_yellow + center_white + center_green))
+    center_road = max(0.0, 1.0 - center_white - center_green)
 
-    # Offset firmado: punto medio entre amarillo y blanco respecto al centro.
-    # Solo es confiable con ambas marcas visibles; si no, queda None (la simetria
-    # de center_clearance igual sostiene el termino de centrado).
-    yc = _centroid_col(yellow, roi_w)
-    wc = _centroid_col(white, roi_w)
-    if yc is not None and wc is not None and roi_w > 0:
-        lane_center = 0.5 * (yc + wc)
-        offset = (lane_center - roi_w / 2.0) / (roi_w / 2.0)
+    # Offset firmado: hacia donde esta la CALZADA (centroide del road respecto al
+    # centro). En una curva el road se corre hacia un lado -> indica el steer.
+    rc = _centroid_col(road, roi_w)
+    if rc is not None and roi_w > 0:
+        offset = (rc - roi_w / 2.0) / (roi_w / 2.0)
         offset = float(max(-1.0, min(1.0, offset)))
     else:
         offset = None
 
-    line_visible = (yc is not None) or (wc is not None)
+    road_visible = road_frac > 0.05
 
     return {
-        "yellow_frac": yellow_frac,
+        "road_frac": road_frac,
         "white_frac": white_frac,
         "green_frac": green_frac,
-        "center_yellow": center_yellow,
+        # center_clearance ahora = fraccion de CALZADA en el centro (no penaliza amarillo)
+        "center_clearance": center_road,
         "center_white": center_white,
         "center_green": center_green,
-        "center_clearance": center_clearance,
         "offset": offset,
-        "line_visible": bool(line_visible),
+        # line_visible ahora = hay calzada visible (queda el mismo nombre de campo)
+        "line_visible": bool(road_visible),
     }

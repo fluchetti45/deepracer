@@ -15,6 +15,7 @@ from helpers.training_server import TrainingServer
 from helpers.policy_runner import PolicyRunner
 from helpers.image_obs import blank_image_payload
 from helpers.lane_vision import decode_rgb_hwc, detect_lane
+from helpers.track_progress import build_loop, project_s, signed_delta
 
 
 # Domain randomization de la pose del robot al inicio de cada episodio: jitter de
@@ -92,6 +93,34 @@ LINE_LOST_PENALTY = read_env_value("LINE_LOST_PENALTY", -0.3)
 # Steps consecutivos sin ver el carril antes de terminar el episodio.
 LOST_LINE_MAX_STEPS = read_env_value("LOST_LINE_MAX_STEPS", 20, int)
 
+# ----------------------------------------------------------------------------
+# Progreso por gates (si el track tiene "gates" en spawns.json). Reemplaza al
+# termino de velocidad como motor de avance: premia avanzar SOBRE el circuito
+# (Δarc-length), no ir rapido en cualquier direccion (mata loop/reversa/corte).
+# ----------------------------------------------------------------------------
+# Peso del progreso. Se multiplica por un Δs normalizado (~[-1, 1]) y por clearance.
+REWARD_PROGRESS_W = read_env_value("REWARD_PROGRESS_W", 1.0)
+# Bonus terminal al completar una vuelta (progreso neto >= perimetro).
+LAP_BONUS = read_env_value("LAP_BONUS", 5.0)
+# Penalizacion terminal por ir en contramano demasiados steps.
+WRONG_WAY_PENALTY = read_env_value("WRONG_WAY_PENALTY", -1.0)
+# Steps consecutivos de progreso negativo (contramano) antes de terminar.
+WRONG_WAY_MAX_STEPS = read_env_value("WRONG_WAY_MAX_STEPS", 30, int)
+
+# ----------------------------------------------------------------------------
+# Linea de largada/meta UNICA (fallback de deteccion de vuelta cuando el track NO
+# tiene gates). La linea pasa por el punto del spawn, perpendicular al rumbo del
+# spawn; el SENTIDO valido es el del spawn (rumbo +). Una vuelta = el robot, tras
+# alejarse hacia adelante, vuelve y cruza la linea en el sentido del spawn.
+# ----------------------------------------------------------------------------
+# Semi-ancho lateral (m) de la linea: el cruce solo cuenta si el robot pasa a menos
+# de esta distancia del punto del spawn (asi solo dispara cerca de la largada, no en
+# el otro extremo del circuito que cae en el mismo semiplano).
+START_LINE_HALF_WIDTH = read_env_value("START_LINE_HALF_WIDTH", 0.5)
+# Distancia (m) hacia adelante que el robot debe alejarse de la linea para "armar"
+# la deteccion (evita contar la largada inicial como vuelta).
+START_LINE_ARM_DISTANCE = read_env_value("START_LINE_ARM_DISTANCE", 0.5)
+
 
 class SupervisorController:
     """
@@ -148,6 +177,21 @@ class SupervisorController:
         self.track_spawns = self._load_track_spawns()
         # Track del episodio en curso (para metricas/telemetria). None = default del .wbt.
         self.current_track_texture = None
+        # Estado de progreso por gates del episodio en curso (None = track sin gates).
+        self.current_loop = None
+        self.progress_s = 0.0
+        self.cumulative_progress = 0.0
+        self.wrong_way_steps = 0
+        # Spawn del episodio en curso (translation, rotation) para la linea de meta.
+        self.current_spawn = None
+        # Linea de largada/meta unica (fallback sin gates). None = no aplica.
+        self.start_line = None
+        self.start_line_armed = False
+        self.start_line_prev_dfwd = 0.0
+        # Maximo avance esperado por step, para normalizar Δs a ~[-1, 1].
+        self._max_step_progress = max(
+            1e-6, MAX_LINEAR_SPEED * (self.timestep / 1000.0) * ACTION_REPEAT
+        )
         self.current_map_config = None
         self.current_spawn_pose_index = None
         self.episodes_on_current_map = 0
@@ -673,6 +717,14 @@ class SupervisorController:
         valid = []
         for track in tracks or []:
             texture = track.get("texture") if isinstance(track, dict) else None
+            # Tracks marcados "eval": true son SOLO para evaluacion (rl/evaluate.py los
+            # fuerza por su cuenta); se excluyen del pool de entrenamiento.
+            if isinstance(track, dict) and track.get("eval"):
+                log_supervisor(
+                    f"[Supervisor] track '{texture}' es eval-only; excluido del training.",
+                    force=True,
+                )
+                continue
             spawns = [s for s in track.get("spawns", []) if self._valid_spawn(s)]
             if not (isinstance(texture, str) and texture and spawns):
                 continue
@@ -684,7 +736,19 @@ class SupervisorController:
                     force=True,
                 )
                 continue
-            valid.append({"texture": texture, "spawns": spawns})
+            # Gates ordenados (opcional) -> loop para el reward de progreso. None si
+            # no hay gates / son invalidos (ese track cae al reward de velocidad vision).
+            loop = None
+            gates = track.get("gates")
+            if isinstance(gates, list) and len(gates) >= 2:
+                try:
+                    loop = build_loop([[float(g[0]), float(g[1])] for g in gates])
+                except (TypeError, ValueError, IndexError):
+                    log_supervisor(
+                        f"[Supervisor] gates de '{texture}' invalidos; sin progreso.",
+                        force=True,
+                    )
+            valid.append({"texture": texture, "spawns": spawns, "loop": loop})
         if not valid:
             log_supervisor(
                 "[Supervisor] spawns.json sin tracks validos; track/pose por defecto.",
@@ -724,14 +788,104 @@ class SupervisorController:
         if self.floor_texture_url_field is not None:
             self.floor_texture_url_field.setMFString(0, track["texture"])
         self.current_track_texture = track["texture"]
+        self.current_loop = track.get("loop")
         log_supervisor(f"[Supervisor] episodio {self.episode_id + 1} en track '{track['texture']}'")
         return list(spawn["translation"]), list(spawn["rotation"])
+
+    def _init_progress(self):
+        """Resetea el progreso del episodio; fija el s inicial desde la pose del spawn."""
+        self.cumulative_progress = 0.0
+        self.wrong_way_steps = 0
+        if self.current_loop is not None:
+            pos = self.epuck_robot.getPosition()
+            self.progress_s = project_s(self.current_loop, (pos[0], pos[1]))
+        else:
+            self.progress_s = 0.0
+        self._init_start_line()
+
+    def _init_start_line(self):
+        """
+        Arma la linea de largada/meta unica desde la pose del spawn. Solo aplica cuando
+        el track NO tiene gates y hay un spawn definido: la linea pasa por el punto del
+        spawn, perpendicular a su rumbo, y el sentido valido de cruce es el del spawn.
+        """
+        self.start_line = None
+        self.start_line_armed = False
+        self.start_line_prev_dfwd = 0.0
+        if self.current_loop is not None or self.current_spawn is None:
+            return
+        translation, rotation = self.current_spawn
+        if translation is None or rotation is None or len(rotation) < 4:
+            return
+        # Rumbo del spawn: el robot mira a +x local; rotado theta sobre z -> (cos, sin).
+        # rotation = [ax, ay, az, angle]; az=+1 gira +theta, az=-1 gira -theta.
+        theta = float(rotation[3]) * (1.0 if float(rotation[2]) >= 0.0 else -1.0)
+        forward = (math.cos(theta), math.sin(theta))
+        lateral = (-math.sin(theta), math.cos(theta))
+        p0 = (float(translation[0]), float(translation[1]))
+        self.start_line = {"p0": p0, "forward": forward, "lateral": lateral}
+        # d_forward inicial desde la pose ya asentada, para no contar un cruce espurio.
+        pos = self.epuck_robot.getPosition()
+        self.start_line_prev_dfwd = (
+            (pos[0] - p0[0]) * forward[0] + (pos[1] - p0[1]) * forward[1]
+        )
+
+    def _update_start_line(self):
+        """
+        Deteccion de vuelta por cruce de la linea de meta unica (sin gates). Devuelve
+        True el step en que el robot, ya alejado hacia adelante (armado), vuelve y cruza
+        la linea cerca del punto del spawn y en el sentido del spawn (d_forward de - a +).
+        """
+        if self.start_line is None:
+            return False
+        line = self.start_line
+        pos = self.epuck_robot.getPosition()
+        rel = (pos[0] - line["p0"][0], pos[1] - line["p0"][1])
+        d_fwd = rel[0] * line["forward"][0] + rel[1] * line["forward"][1]
+        d_lat = rel[0] * line["lateral"][0] + rel[1] * line["lateral"][1]
+        # Armar una vez que se alejo bien hacia adelante (deja atras la largada inicial).
+        if not self.start_line_armed and d_fwd > START_LINE_ARM_DISTANCE:
+            self.start_line_armed = True
+        lap = False
+        if (
+            self.start_line_armed
+            and abs(d_lat) < START_LINE_HALF_WIDTH
+            and self.start_line_prev_dfwd < 0.0
+            and d_fwd >= 0.0
+        ):
+            lap = True
+            self.start_line_armed = False  # rearmar para una eventual proxima vuelta
+        self.start_line_prev_dfwd = d_fwd
+        return lap
+
+    def _update_progress(self):
+        """
+        Avanza el progreso sobre el circuito. Devuelve (progress_delta, lap_done).
+        progress_delta = None si el track no tiene gates (el reward cae a velocidad).
+        """
+        if self.current_loop is None:
+            return None, False
+        total = self.current_loop[2]
+        pos = self.epuck_robot.getPosition()
+        s_cur = project_s(self.current_loop, (pos[0], pos[1]))
+        delta = signed_delta(self.progress_s, s_cur, total)
+        self.progress_s = s_cur
+        self.cumulative_progress += delta
+        # Contramano: contar steps de retroceso (umbral para ignorar jitter chico).
+        if delta < -0.25 * self._max_step_progress:
+            self.wrong_way_steps += 1
+        else:
+            self.wrong_way_steps = 0
+        lap_done = self.cumulative_progress >= total
+        return delta, lap_done
 
     def _handle_reset_env_request(self, request, request_id):
         self._request_robot("reset_robot", "reset_done")
         # Nuevo episodio: track + spawn random (si hay spawns.json). Se setea la
         # textura ANTES del settle para que la imagen post-reset ya sea del track nuevo.
         translation, rotation = self._select_random_track_spawn()
+        # Guardar el spawn para la linea de meta (fallback sin gates).
+        self.current_spawn = (translation, rotation) if translation is not None else None
         self._reset_robot_pose(translation=translation, rotation=rotation)
         # Jitter de pose SOBRE el spawn elegido (si DR esta activo).
         self._apply_domain_randomization()
@@ -739,8 +893,9 @@ class SupervisorController:
         self._refresh_robot_observation()
         self.episode_id += 1
         self.episode_step = 0
-        # Nuevo episodio: limpiar estado de carril y el stack de frames de la policy.
+        # Nuevo episodio: limpiar estado de carril, progreso y el stack de la policy.
         self.lost_line_steps = 0
+        self._init_progress()
         self.last_reward_breakdown = None
         self.policy_runner.reset_stack()
         return {
@@ -765,17 +920,13 @@ class SupervisorController:
             log_supervisor(f"[Supervisor] error en deteccion de carril: {exc}", force=True)
             return {}
 
-    def _compute_reward_breakdown(self, action, velocity):
+    def _compute_reward_breakdown(self, action, velocity, progress_delta=None, lap_done=False):
         """
-        Calcula el reward y su desglose por componente desde la imagen de la camara
-        frontal (vision-pura, opcion A). UNICA fuente de verdad del reward: la usan
-        tanto el step de entrenamiento (_handle_step_env_request) como el panel de
-        debug de la Robot Window, asi la window muestra EXACTAMENTE el mismo reward
-        que ve el agente.
-
-        El agente navega su carril (corredor entre la linea amarilla del centro y la
-        blanca del borde). Mantener la banda central de la vista como asfalto limpio
-        => va centrado. Pasto en el centro => se fue de la pista (termina).
+        Calcula el reward y su desglose. UNICA fuente de verdad (step de entrenamiento
+        + panel de debug). Si el track tiene gates, el AVANCE lo da el PROGRESO sobre el
+        circuito (Δarc-length) en vez de la velocidad cruda -> no premia loopear ni ir
+        en contramano. clearance (calzada en el centro) gatea el avance; pasto en el
+        centro = off-track (terminal); completar la vuelta = exito terminal con bonus.
         """
         features = self._lane_features()
 
@@ -789,57 +940,52 @@ class SupervisorController:
         line_visible = bool(features.get("line_visible", False))
         has_features = bool(features)
 
-        # --- Terminacion: el frente del robot esta sobre pasto => fuera de pista. ---
-        terminated = has_features and green_center >= OFFTRACK_GREEN_FRAC
-        if terminated:
+        # --- Vuelta completa => exito terminal con bonus alto. ---
+        if lap_done:
             return self._reward_dict(
-                reward=float(OFFTRACK_PENALTY),
-                terminated=True,
-                term_reason="offtrack_grass",
-                clearance=clearance,
-                offset=offset,
-                speed=speed_fwd,
-                green_center=green_center,
-                white_center=white_center,
-                line_visible=line_visible,
+                reward=float(LAP_BONUS), terminated=True, term_reason="lap_complete",
+                clearance=clearance, offset=offset, speed=speed_fwd, progress=progress_delta,
+                green_center=green_center, white_center=white_center, line_visible=line_visible,
             )
 
-        # --- Reward denso: ir RAPIDO mientras se mantiene CENTRADO. ---
-        # clearance (1 centrado, 0 al borde/pasto) es un GATE que multiplica la
-        # base + la velocidad: crawlear centrado da poco, solo se cobra fuerte
-        # yendo rapido y centrado. Las penas (blanco/offset) se restan aparte.
-        r_drive = clearance * (REWARD_BASE + REWARD_SPEED_W * speed_fwd)
+        # --- Off-track: pasto en el centro => terminal. ---
+        if has_features and green_center >= OFFTRACK_GREEN_FRAC:
+            return self._reward_dict(
+                reward=float(OFFTRACK_PENALTY), terminated=True, term_reason="offtrack_grass",
+                clearance=clearance, offset=offset, speed=speed_fwd, progress=progress_delta,
+                green_center=green_center, white_center=white_center, line_visible=line_visible,
+            )
+
+        # --- Avance: PROGRESO sobre el circuito (si hay gates) o velocidad vision. ---
+        # Gateado por clearance: solo cobra fuerte avanzando Y sobre la calzada.
+        if progress_delta is not None:
+            progress_norm = max(-1.0, min(1.0, progress_delta / self._max_step_progress))
+            r_forward = REWARD_PROGRESS_W * progress_norm * clearance
+        else:
+            r_forward = REWARD_SPEED_W * speed_fwd * clearance
+        r_base = REWARD_BASE * clearance
         r_offset = -REWARD_OFFSET_W * abs(offset) if offset is not None else 0.0
         r_white = -REWARD_WHITE_W * white_center
         r_lost = LINE_LOST_PENALTY if (has_features and not line_visible) else 0.0
         r_step = -REWARD_STEP_COST
         # Sin features (imagen invalida) no premiamos ni penalizamos.
         if not has_features:
-            r_drive = r_offset = r_white = r_lost = 0.0
+            r_base = r_forward = r_offset = r_white = r_lost = 0.0
 
-        reward = r_drive + r_offset + r_white + r_lost + r_step
+        reward = r_base + r_forward + r_offset + r_white + r_lost + r_step
 
         return self._reward_dict(
-            reward=float(reward),
-            terminated=False,
-            term_reason=None,
-            clearance=clearance,
-            offset=offset,
-            speed=speed_fwd,
-            green_center=green_center,
-            white_center=white_center,
-            line_visible=line_visible,
-            r_drive=r_drive,
-            r_offset=r_offset,
-            r_white=r_white,
-            r_lost=r_lost,
-            r_step=r_step,
+            reward=float(reward), terminated=False, term_reason=None,
+            clearance=clearance, offset=offset, speed=speed_fwd, progress=progress_delta,
+            green_center=green_center, white_center=white_center, line_visible=line_visible,
+            r_drive=r_base + r_forward, r_offset=r_offset, r_white=r_white,
+            r_lost=r_lost, r_step=r_step,
         )
 
     @staticmethod
     def _reward_dict(reward, terminated, term_reason, clearance, offset,
                      green_center, white_center, line_visible, speed=0.0,
-                     r_drive=0.0, r_offset=0.0, r_white=0.0,
+                     progress=None, r_drive=0.0, r_offset=0.0, r_white=0.0,
                      r_lost=0.0, r_step=0.0):
         """Estructura uniforme del desglose de reward (misma forma siempre)."""
         return {
@@ -850,6 +996,7 @@ class SupervisorController:
             "center_clearance": round(clearance, 4),
             "offset": round(offset, 4) if offset is not None else None,
             "speed": round(speed, 4),
+            "progress": round(progress, 5) if progress is not None else None,
             "green_center": round(green_center, 4),
             "white_center": round(white_center, 4),
             "line_visible": bool(line_visible),
@@ -868,8 +1015,16 @@ class SupervisorController:
         self._refresh_robot_observation()
         self.episode_step += 1
 
+        # Progreso sobre el circuito (si el track tiene gates).
+        progress_delta, lap_done = self._update_progress()
+        # Sin gates: deteccion de vuelta por cruce de la linea de meta unica.
+        if not lap_done and self.current_loop is None:
+            lap_done = self._update_start_line()
+
         velocity = self._compute_velocity()
-        breakdown = self._compute_reward_breakdown(action, velocity)
+        breakdown = self._compute_reward_breakdown(
+            action, velocity, progress_delta=progress_delta, lap_done=lap_done
+        )
         self.last_reward_breakdown = breakdown
 
         # Carril perdido: contador para terminar si el robot se desorienta.
@@ -882,6 +1037,11 @@ class SupervisorController:
         if not terminated and self.lost_line_steps >= LOST_LINE_MAX_STEPS:
             terminated = True
             breakdown["term_reason"] = "line_lost"
+        # Contramano sostenido => terminar (el reset lo deja encarado bien de nuevo).
+        if not terminated and self.wrong_way_steps >= WRONG_WAY_MAX_STEPS:
+            terminated = True
+            breakdown["term_reason"] = "wrong_way"
+            breakdown["reward"] = round(float(WRONG_WAY_PENALTY), 4)
         truncated = (not terminated) and self.episode_step >= self.episode_max_steps
 
         return {
@@ -896,6 +1056,7 @@ class SupervisorController:
                 "episode_step": self.episode_step,
                 "lost_line_steps": self.lost_line_steps,
                 "track": self.current_track_texture,
+                "cumulative_progress": round(self.cumulative_progress, 4),
             },
         }
 

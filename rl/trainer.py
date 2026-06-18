@@ -44,13 +44,17 @@ class RLMetricsCallback(BaseCallback):
         super().__init__()
         # Contadores acumulados durante toda la corrida.
         self.total_episodes = 0
+        self.total_laps = 0
         self.total_offtrack = 0
         self.total_line_lost = 0
+        self.total_wrong_way = 0
         self.total_timeouts = 0
         # Acumuladores por rollout (se resetean en cada _on_rollout_end).
         self._rollout_episodes = 0
+        self._rollout_laps = 0
         self._rollout_offtrack = 0
         self._rollout_line_lost = 0
+        self._rollout_wrong_way = 0
         self._rollout_timeouts = 0
         self._continuous = defaultdict(list)
 
@@ -83,7 +87,13 @@ class RLMetricsCallback(BaseCallback):
                 continue
             breakdown = info.get("reward_breakdown")
             reason = breakdown.get("term_reason") if isinstance(breakdown, dict) else None
-            if reason == "line_lost":
+            if reason == "lap_complete":  # EXITO: completo la vuelta
+                self.total_laps += 1
+                self._rollout_laps += 1
+            elif reason == "wrong_way":
+                self.total_wrong_way += 1
+                self._rollout_wrong_way += 1
+            elif reason == "line_lost":
                 self.total_line_lost += 1
                 self._rollout_line_lost += 1
             else:  # offtrack_grass (u otra terminacion)
@@ -95,15 +105,19 @@ class RLMetricsCallback(BaseCallback):
     def _on_rollout_end(self):
         # Conteos acumulados (monotonos).
         self.logger.record("custom/episodes_total", self.total_episodes)
+        self.logger.record("custom/laps_total", self.total_laps)
         self.logger.record("custom/offtrack_total", self.total_offtrack)
         self.logger.record("custom/line_lost_total", self.total_line_lost)
+        self.logger.record("custom/wrong_way_total", self.total_wrong_way)
         self.logger.record("custom/timeouts_total", self.total_timeouts)
 
         # Tasas por rollout.
         if self._rollout_episodes > 0:
             n = self._rollout_episodes
+            self.logger.record("custom/lap_rate", self._rollout_laps / n)
             self.logger.record("custom/offtrack_rate", self._rollout_offtrack / n)
             self.logger.record("custom/line_lost_rate", self._rollout_line_lost / n)
+            self.logger.record("custom/wrong_way_rate", self._rollout_wrong_way / n)
             self.logger.record("custom/timeout_rate", self._rollout_timeouts / n)
             self.logger.record("custom/episodes_this_rollout", n)
 
@@ -114,8 +128,10 @@ class RLMetricsCallback(BaseCallback):
 
         # Reset de acumuladores por rollout.
         self._rollout_episodes = 0
+        self._rollout_laps = 0
         self._rollout_offtrack = 0
         self._rollout_line_lost = 0
+        self._rollout_wrong_way = 0
         self._rollout_timeouts = 0
         self._continuous.clear()
 
@@ -126,8 +142,10 @@ class RLMetricsCallback(BaseCallback):
         print("=" * 52)
         print("RESUMEN DE EPISODIOS")
         print(f"  episodios totales : {total}")
+        print(f"  VUELTAS completas : {self.total_laps:5d}  ({pct(self.total_laps)})")
         print(f"  off-track (pasto) : {self.total_offtrack:5d}  ({pct(self.total_offtrack)})")
         print(f"  carril perdido    : {self.total_line_lost:5d}  ({pct(self.total_line_lost)})")
+        print(f"  contramano        : {self.total_wrong_way:5d}  ({pct(self.total_wrong_way)})")
         print(f"  timeout           : {self.total_timeouts:5d}  ({pct(self.total_timeouts)})")
         print("=" * 52)
 
