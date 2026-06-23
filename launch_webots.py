@@ -23,7 +23,7 @@ def parse_args():
     )
     parser.add_argument(
         "--webots-world",
-        default="worlds/track1.wbt",
+        default="worlds/ackermann.wbt",
         help="World de Webots a lanzar automaticamente.",
     )
     parser.add_argument(

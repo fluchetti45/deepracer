@@ -25,7 +25,15 @@ from stable_baselines3.common.vec_env import (
 )
 from launch_webots import launch_webots, launch_webots_instances
 
+from helpers.read_env_value import read_env_value
 from rl.env import NavEnv
+
+
+def resolve_world(args):
+    """World a lanzar: el de --webots-world si se paso, si no se deriva de --drive."""
+    if args.webots_world:
+        return args.webots_world
+    return "worlds/ackermann.wbt" if args.drive == "ackermann" else "worlds/track1.wbt"
 
 
 class RLMetricsCallback(BaseCallback):
@@ -267,9 +275,22 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--drive",
+        default=read_env_value("DRIVE_TYPE", "ackermann", str),
+        choices=["ackermann", "differential"],
+        help=(
+            "Tipo de conduccion: 'ackermann' (auto) o 'differential' (e-puck). Elige el "
+            "world por defecto y filtra los tracks de spawns.json a ese drive. Default: "
+            "DRIVE_TYPE del .env."
+        ),
+    )
+    parser.add_argument(
         "--webots-world",
-        default="worlds/track1.wbt",
-        help="World de Webots a lanzar automaticamente.",
+        default=None,
+        help=(
+            "World de Webots a lanzar. Si se omite, se deriva de --drive "
+            "(ackermann -> worlds/ackermann.wbt, differential -> worlds/track1.wbt)."
+        ),
     )
     parser.add_argument(
         "--webots-executable",
@@ -621,6 +642,8 @@ def write_training_run_metadata(args, model, run_paths):
             "vecnormalize_path": os.path.abspath(run_paths["vecnormalize_path"]),
         },
         "hyperparameters": {
+            "drive_type": args.drive,
+            "webots_world": args.webots_world,
             "total_timesteps": int(args.total_timesteps),
             "learning_rate": float(args.learning_rate),
             "vf_coef": float(args.vf_coef),
@@ -652,6 +675,12 @@ def run_training(args):
     Ejecuta una sesion de entrenamiento completa. Devuelve rutas clave al terminar con exito.
     """
     webots_processes = []
+
+    # Resolver world y tipo de conduccion. DRIVE_TYPE se inyecta al entorno ANTES de
+    # lanzar Webots: el supervisor lo lee para filtrar los tracks de spawns.json.
+    args.webots_world = resolve_world(args)
+    os.environ["DRIVE_TYPE"] = args.drive
+    print(f"Drive: {args.drive}  |  World: {args.webots_world}")
 
     # Puertos: base, base+1, ... uno por entorno paralelo.
     n_envs = max(1, int(args.n_envs))

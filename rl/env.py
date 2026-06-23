@@ -22,12 +22,13 @@ class NavEnv(gym.Env):
         port=DEFAULT_PORT,
     ):
         self.bridge = bridge or SupervisorSocketBridge(host=host, port=port)
+        # Accion estilo DeepRacer: [steering, speed] (2 valores). El controller mapea
+        # steering -> angulo de direccion y speed -> velocidad de ruedas traseras.
         self.wheel_count = 2
         self.velocity_size = 2  # [forward, yaw_rate] del cuerpo en frame local
-        # La accion del gym es NORMALIZADA en [-1, 1] (fraccion de la velocidad
-        # maxima de la rueda). El escalado a rad/s reales lo hace el robot_controller
-        # con su propia maxVelocity y el margen MOTOR_SPEED_MARGIN. Mantener la accion
-        # en [-1, 1] hace que la policy gaussiana (sigma ~1) explore todo el rango.
+        # La accion del gym es NORMALIZADA en [-1, 1]. El escalado real (angulo en rad,
+        # velocidad en rad/s) lo hace el agent_controller. Mantener la accion en [-1, 1]
+        # hace que la policy gaussiana (sigma ~1) explore todo el rango.
         self.action_low = -1.0
         self.action_high = 1.0
         self.default_reset_options = {}
@@ -49,8 +50,9 @@ class NavEnv(gym.Env):
         }
         self.observation_space = gym.spaces.Dict(observation_spaces)
         # Espacio de acción.
-        # Vector de 2 elementos (rueda izq/der) NORMALIZADO en [-1.0, 1.0].
-        # -1 = full reversa, +1 = full adelante; el robot lo escala a rad/s.
+        # Vector de 2 elementos [steering, speed] NORMALIZADO en [-1.0, 1.0].
+        # steering: -1 derecha / +1 izquierda (angulo). speed: -1 minima / +1 maxima
+        # (siempre positiva). El agent_controller lo escala a rad y rad/s.
         self.action_space = gym.spaces.Box(
             low=self.action_low,
             high=self.action_high,

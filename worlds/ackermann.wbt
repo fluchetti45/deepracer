@@ -1,16 +1,310 @@
 #VRML_SIM R2025a utf8
+
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/RedBricks.proto"
+
 WorldInfo {
+  basicTimeStep 32
+  contactProperties [
+    ContactProperties {
+      material1 "wheel"
+      material2 "default"
+      coulombFriction [
+        8
+      ]
+      bounce 0
+      softCFM 0.0001
+    }
+  ]
 }
 Viewpoint {
-  orientation -0.5773 0.5773 0.5773 2.0944
-  position 0 0 10
+  orientation -0.5035148678562779 0.20534107603998084 0.8392304929746166 2.482089341403223
+  position 3.408541537051303 -2.3493106131773627 9.007621582677112
 }
 TexturedBackground {
 }
 TexturedBackgroundLight {
 }
-RectangleArena {
+DEF ARENA RectangleArena {
+  floorSize 8 8
+  floorAppearance Appearance {
+    texture DEF FLOOR_TEX ImageTexture {
+      url [
+        "track1_ackermann.png"
+      ]
+      repeatS FALSE
+      repeatT FALSE
+    }
+    textureTransform TextureTransform {
+      center 0.3 0.3
+      scale 0.1 0.1
+    }
+  }
+  wallAppearance RedBricks {
+  }
+}
+Robot {
+  children [
+    Receiver {
+      channel 1
+    }
+    Emitter {
+      channel 1
+    }
+  ]
+  controller "supervisor_controller"
+  supervisor TRUE
+  window "supervisor_window"
+}
+# ----------------------------------------------------------------------------
+# Auto estilo DeepRacer (1/18): traccion trasera (rear-wheel drive) + direccion
+# Ackermann delantera. Dimensiones aproximadas del DeepRacer real:
+#   wheelbase 0.16 m | trocha 0.13 m | radio de rueda 0.03 m | masa ~1.5 kg
+# Frame del robot: forward = +x, lateral = +y, up = +z; origen a nivel del piso.
+# Se mantiene el DEF EPUCK y los nombres de devices para no tocar el supervisor.
+# Fase 1: direccion "paralela" (ambas ruedas al mismo angulo); Ackermann real luego.
+# ----------------------------------------------------------------------------
+DEF EPUCK Robot {
+  translation 0 0 0
+  rotation 0 0 1 0
+  children [
+    # --- Chasis (visual) ---
+    DEF BODY Pose {
+      translation 0 0 0.05
+      children [
+        Shape {
+          appearance PBRAppearance {
+            baseColor 0.15 0.35 0.85
+            roughness 0.5
+            metalness 0.2
+          }
+          geometry Box {
+            size 0.20 0.10 0.04
+          }
+        }
+      ]
+    }
+    # --- Camara frontal (mira hacia adelante, leve pitch hacia abajo) ---
+    # Camara estilo DeepRacer: 160x120, FOV horizontal ancho (~120 deg) para ver los
+    # costados en las curvas. RGB (el reward del supervisor usa color). La distorsion
+    # fisheye real del DeepRacer queda para la pasada de calibracion sim2real.
+    Camera {
+      translation 0.11 0 0.08
+      rotation 0 1 0 0.2
+      name "camera"
+      fieldOfView 2.0944
+      width 160
+      height 120
+      near 0.0055
+    }
+    # --- Rueda trasera izquierda (traccion) ---
+    HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 1 0
+        anchor -0.08 0.065 0.03
+      }
+      device [
+        RotationalMotor {
+          name "left rear motor"
+          maxVelocity 50
+          maxTorque 0.5
+        }
+        PositionSensor {
+          name "left rear sensor"
+        }
+      ]
+      endPoint DEF WHEEL_RL Solid {
+        translation -0.08 0.065 0.03
+        children [
+          DEF WHEEL_SHAPE Pose {
+            rotation 1 0 0 1.570796
+            children [
+              Shape {
+                appearance DEF WHEEL_APP PBRAppearance {
+                  baseColor 0.08 0.08 0.08
+                  roughness 0.7
+                  metalness 0
+                }
+                geometry Cylinder {
+                  height 0.02
+                  radius 0.03
+                  subdivision 24
+                }
+              }
+            ]
+          }
+        ]
+        name "rear left wheel"
+        contactMaterial "wheel"
+        boundingObject DEF WHEEL_BO Pose {
+          rotation 1 0 0 1.570796
+          children [
+            Cylinder {
+              height 0.02
+              radius 0.03
+              subdivision 24
+            }
+          ]
+        }
+        physics DEF WHEEL_PH Physics {
+          density -1
+          mass 0.05
+        }
+      }
+    }
+    # --- Rueda trasera derecha (traccion) ---
+    HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 1 0
+        anchor -0.08 -0.065 0.03
+      }
+      device [
+        RotationalMotor {
+          name "right rear motor"
+          maxVelocity 50
+          maxTorque 0.5
+        }
+        PositionSensor {
+          name "right rear sensor"
+        }
+      ]
+      endPoint DEF WHEEL_RR Solid {
+        translation -0.08 -0.065 0.03
+        children [
+          USE WHEEL_SHAPE
+        ]
+        name "rear right wheel"
+        contactMaterial "wheel"
+        boundingObject USE WHEEL_BO
+        physics USE WHEEL_PH
+      }
+    }
+    # --- Direccion + rueda delantera izquierda ---
+    HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 0 1
+        anchor 0.08 0.065 0.03
+      }
+      device [
+        RotationalMotor {
+          name "left steer motor"
+          maxTorque 100
+          minPosition -0.8
+          maxPosition 0.8
+        }
+        PositionSensor {
+          name "left steer sensor"
+        }
+      ]
+      endPoint DEF KNUCKLE_FL Solid {
+        translation 0.08 0.065 0.03
+        children [
+          HingeJoint {
+            jointParameters HingeJointParameters {
+              axis 0 1 0
+              anchor 0 0 0
+            }
+            endPoint DEF WHEEL_FL Solid {
+              translation 0 0 0
+              children [
+                USE WHEEL_SHAPE
+              ]
+              name "front left wheel"
+              contactMaterial "wheel"
+              boundingObject USE WHEEL_BO
+              physics USE WHEEL_PH
+            }
+          }
+        ]
+        name "left knuckle"
+        physics Physics {
+          density -1
+          mass 0.02
+          centerOfMass [
+            0 0 0
+          ]
+          inertiaMatrix [
+            2e-06 2e-06 2e-06
+            0 0 0
+          ]
+        }
+      }
+    }
+    # --- Direccion + rueda delantera derecha ---
+    HingeJoint {
+      jointParameters HingeJointParameters {
+        axis 0 0 1
+        anchor 0.08 -0.065 0.03
+      }
+      device [
+        RotationalMotor {
+          name "right steer motor"
+          maxTorque 100
+          minPosition -0.8
+          maxPosition 0.8
+        }
+        PositionSensor {
+          name "right steer sensor"
+        }
+      ]
+      endPoint DEF KNUCKLE_FR Solid {
+        translation 0.08 -0.065 0.03
+        children [
+          HingeJoint {
+            jointParameters HingeJointParameters {
+              axis 0 1 0
+              anchor 0 0 0
+            }
+            endPoint DEF WHEEL_FR Solid {
+              translation 0 0 0
+              children [
+                USE WHEEL_SHAPE
+              ]
+              name "front right wheel"
+              contactMaterial "wheel"
+              boundingObject USE WHEEL_BO
+              physics USE WHEEL_PH
+            }
+          }
+        ]
+        name "right knuckle"
+        physics Physics {
+          density -1
+          mass 0.02
+          centerOfMass [
+            0 0 0
+          ]
+          inertiaMatrix [
+            2e-06 2e-06 2e-06
+            0 0 0
+          ]
+        }
+      }
+    }
+    DEF EPUCK_RECEIVER Receiver {
+      channel 1
+    }
+    DEF EPUCK_EMITTER Emitter {
+      channel 1
+    }
+  ]
+  name "deepracer"
+  boundingObject DEF BODY_BO Pose {
+    translation 0 0 0.05
+    children [
+      Box {
+        size 0.20 0.10 0.04
+      }
+    ]
+  }
+  physics Physics {
+    density -1
+    mass 1.3
+    centerOfMass [
+      0 0 0.035
+    ]
+  }
+  controller "agent_controller"
 }

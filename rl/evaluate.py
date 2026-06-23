@@ -95,6 +95,16 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--offtrack-grace",
+        type=int,
+        default=read_env_value("OFFTRACK_MAX_STEPS", 3, int),
+        help=(
+            "Steps seguidos con pasto en el centro antes de cortar por off-track. En eval "
+            "conviene mas gracia que en train (la camara puede quedar mirando pasto en una "
+            "curva sin haberse salido). Se inyecta al supervisor como OFFTRACK_MAX_STEPS."
+        ),
+    )
+    parser.add_argument(
         "--n-stack",
         type=int,
         default=None,
@@ -117,9 +127,21 @@ def parse_args():
     parser.add_argument("--host", default="127.0.0.1", help="Host del supervisor.")
     parser.add_argument("--port", type=int, default=10001, help="Puerto del supervisor.")
     parser.add_argument(
+        "--drive",
+        default=read_env_value("DRIVE_TYPE", "ackermann", str),
+        choices=["ackermann", "differential"],
+        help=(
+            "Tipo de conduccion: 'ackermann' o 'differential'. Elige el world por defecto "
+            "y, sin --track, evalua los tracks eval de ese drive. Default: DRIVE_TYPE del .env."
+        ),
+    )
+    parser.add_argument(
         "--webots-world",
-        default="worlds/track1.wbt",
-        help="World a lanzar (el supervisor le cambia la textura al track elegido).",
+        default=None,
+        help=(
+            "World a lanzar (el supervisor le cambia la textura al track). Si se omite, se "
+            "deriva de --drive (ackermann -> worlds/ackermann.wbt, differential -> worlds/track1.wbt)."
+        ),
     )
     parser.add_argument(
         "--webots-executable",
@@ -165,10 +187,11 @@ def read_n_stack(metadata_path, default):
         return default
 
 
-def build_eval_spawns(spawns_path, texture, spawn_index):
+def build_eval_spawns(spawns_path, texture, spawn_index, drive):
     """
     Escribe un spawns.json temporal con UN solo track (el elegido), de modo que el
-    supervisor siempre lo seleccione. Devuelve (ruta_temporal, tiene_gates).
+    supervisor siempre lo seleccione. El track lleva el 'drive' pedido para pasar el
+    filtro del supervisor. Devuelve (ruta_temporal, tiene_gates).
     """
     with open(spawns_path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
@@ -192,7 +215,7 @@ def build_eval_spawns(spawns_path, texture, spawn_index):
             "DE META unica (cruce sobre el punto del spawn, en el sentido del spawn)."
         )
 
-    one_track = {"texture": texture, "spawns": [spawns[idx]]}
+    one_track = {"texture": texture, "drive": drive, "spawns": [spawns[idx]]}
     if has_gates:
         one_track["gates"] = gates
 
@@ -231,15 +254,18 @@ def classify_done(info):
     return "desconocido"
 
 
-def discover_eval_tracks(spawns_path):
-    """Texturas de los tracks marcados "eval": true en spawns.json, en orden."""
+def discover_eval_tracks(spawns_path, drive):
+    """Texturas de los tracks "eval": true del drive pedido en spawns.json, en orden."""
     with open(spawns_path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
     tracks = data.get("tracks", []) if isinstance(data, dict) else []
     return [
         t["texture"]
         for t in tracks
-        if isinstance(t, dict) and t.get("eval") and t.get("texture")
+        if isinstance(t, dict)
+        and t.get("eval")
+        and t.get("texture")
+        and t.get("drive", "differential") == drive
     ]
 
 
@@ -249,7 +275,7 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
     juntar --laps vueltas (o agotar max_episodes) y devuelve un dict de resultados.
     """
     eval_spawns_path, has_gates = build_eval_spawns(
-        args.spawns, texture, args.spawn_index
+        args.spawns, texture, args.spawn_index, args.drive
     )
     # SPAWNS_JSON se setea por track ANTES de lanzar Webots (launch copia os.environ).
     os.environ["SPAWNS_JSON"] = eval_spawns_path
@@ -375,14 +401,20 @@ def run_evaluation(args):
     n_stack = args.n_stack if args.n_stack is not None else read_n_stack(metadata_path, 4)
     max_episodes = args.max_episodes if args.max_episodes is not None else args.laps * 5 + 5
 
-    # Lista de tracks a evaluar: el indicado, o TODOS los marcados "eval": true.
+    # World segun drive (salvo override explicito con --webots-world).
+    if not args.webots_world:
+        args.webots_world = (
+            "worlds/ackermann.wbt" if args.drive == "ackermann" else "worlds/track1.wbt"
+        )
+
+    # Lista de tracks a evaluar: el indicado, o TODOS los "eval": true de este drive.
     if args.track:
         tracks = [args.track]
     else:
-        tracks = discover_eval_tracks(args.spawns)
+        tracks = discover_eval_tracks(args.spawns, args.drive)
         if not tracks:
             raise SystemExit(
-                f"No hay tracks con \"eval\": true en {args.spawns}. "
+                f"No hay tracks con \"eval\": true y drive='{args.drive}' en {args.spawns}. "
                 "Marca los de evaluacion o pasa --track <textura>."
             )
     if args.no_webots_launch and len(tracks) > 1:
@@ -394,12 +426,16 @@ def run_evaluation(args):
     # Config comun para todos los tracks (heredada por cada Webots que se lanza).
     os.environ["DOMAIN_RANDOMIZATION_ENABLED"] = "0"
     os.environ["MAX_EPISODE_STEPS"] = str(int(args.max_episode_steps))
+    os.environ["DRIVE_TYPE"] = args.drive
+    os.environ["OFFTRACK_MAX_STEPS"] = str(int(args.offtrack_grace))
 
     print("=" * 56)
     print(f"Modelo:        {model_zip}")
     print(f"VecNormalize:  {vecnormalize_path}")
+    print(f"Drive/World:   {args.drive}  ({args.webots_world})")
     print(f"Tracks eval:   {', '.join(tracks)}")
-    print(f"Vueltas/track: {args.laps}   Time limit: {int(args.max_episode_steps)} steps")
+    print(f"Vueltas/track: {args.laps}   Time limit: {int(args.max_episode_steps)} steps   "
+          f"Off-track grace: {int(args.offtrack_grace)} steps")
     print(f"Accion:        {'estocastica' if args.stochastic else 'determinista'}  "
           f"(n_stack={n_stack})")
 

@@ -3,6 +3,7 @@ import sys
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import json
+import math
 import struct
 import numpy as np
 from controller import Robot
@@ -11,12 +12,33 @@ from helpers.read_env_value import read_env_value
 HEADER_FMT = read_env_value("ROBOT_PACKET_HEADER_FORMAT", "!I", str)
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
 
-# Mapeo de accion por rueda: [-1, 1] -> [WHEEL_MIN_SPEED, WHEEL_MAX_SPEED] rad/s.
-# Ambas POSITIVAS: el robot NUNCA retrocede ni frena del todo (estilo DeepRacer).
-#   accion -1 -> WHEEL_MIN_SPEED (velocidad minima),  +1 -> WHEEL_MAX_SPEED.
-# WHEEL_MAX_SPEED queda clampeado por la maxVelocity del motor en el .wbt (6.28).
-WHEEL_MIN_SPEED = read_env_value("WHEEL_MIN_SPEED", 0.75, float)  # rad/s
-WHEEL_MAX_SPEED = read_env_value("WHEEL_MAX_SPEED", 5.0, float)   # rad/s
+# Accion estilo DeepRacer: [steering, speed], ambos NORMALIZADOS en [-1, 1].
+#   steering -1 -> -MAX_STEER_ANGLE (full a la derecha), +1 -> +MAX_STEER_ANGLE (izq).
+#   speed    -1 -> WHEEL_MIN_SPEED (minima),  +1 -> WHEEL_MAX_SPEED (maxima).
+# La velocidad es SIEMPRE positiva (ambas >0): el auto nunca retrocede ni frena del
+# todo. El angulo de direccion acotado da el radio de giro minimo (cinematica
+# Ackermann): no puede pivotar en el lugar -> no se da vuelta sobre la pista.
+MAX_STEER_ANGLE = math.radians(read_env_value("MAX_STEER_ANGLE_DEG", 30.0, float))  # rad
+WHEEL_MIN_SPEED = read_env_value("WHEEL_MIN_SPEED", 0.75, float)  # rad/s (rueda)
+WHEEL_MAX_SPEED = read_env_value("WHEEL_MAX_SPEED", 5.0, float)   # rad/s (rueda)
+# Geometria para la direccion Ackermann REAL (rueda interna gira mas que la externa).
+WHEELBASE = read_env_value("WHEELBASE", 0.16, float)      # m (eje delantero-trasero)
+TRACK_WIDTH = read_env_value("TRACK_WIDTH", 0.13, float)  # m (separacion lateral ruedas)
+
+
+def ackermann_angles(delta):
+    """
+    Dado el angulo de direccion 'central' delta (modelo bicicleta), devuelve los
+    angulos (izq, der) de las ruedas delanteras segun Ackermann: la interna gira mas.
+    Las perpendiculares a ambas ruedas se cruzan en el mismo centro de giro (ICR),
+    asi no hay scrub lateral. Maneja ambos sentidos por el signo de delta.
+    """
+    if abs(delta) < 1e-4:
+        return 0.0, 0.0
+    radius = WHEELBASE / math.tan(delta)  # distancia del ICR a la linea central
+    left = math.atan(WHEELBASE / (radius - TRACK_WIDTH / 2.0))
+    right = math.atan(WHEELBASE / (radius + TRACK_WIDTH / 2.0))
+    return left, right
 
 
 class EpuckController:
@@ -27,17 +49,18 @@ class EpuckController:
         self.camera = self.robot.getDevice("camera")
         self.camera.enable(self.timestep)
 
-        self.left_motor = self.robot.getDevice("left wheel motor")
-        self.right_motor = self.robot.getDevice("right wheel motor")
-        self.left_motor.setPosition(float("inf"))
-        self.right_motor.setPosition(float("inf"))
-        self.left_motor.setVelocity(0.0)
-        self.right_motor.setVelocity(0.0)
+        # Traccion trasera: motores de velocidad en las dos ruedas traseras.
+        self.left_rear_motor = self.robot.getDevice("left rear motor")
+        self.right_rear_motor = self.robot.getDevice("right rear motor")
+        for motor in (self.left_rear_motor, self.right_rear_motor):
+            motor.setPosition(float("inf"))  # modo velocidad
+            motor.setVelocity(0.0)
 
-        self.left_encoder = self.robot.getDevice("left wheel sensor")
-        self.right_encoder = self.robot.getDevice("right wheel sensor")
-        self.left_encoder.enable(self.timestep)
-        self.right_encoder.enable(self.timestep)
+        # Direccion Ackermann: motores de POSICION en las dos ruedas delanteras.
+        self.left_steer_motor = self.robot.getDevice("left steer motor")
+        self.right_steer_motor = self.robot.getDevice("right steer motor")
+        for motor in (self.left_steer_motor, self.right_steer_motor):
+            motor.setPosition(0.0)
 
         self.receiver = self.robot.getDevice("receiver")
         self.emitter = self.robot.getDevice("emitter")
@@ -67,20 +90,24 @@ class EpuckController:
     # ------------------------------------------------------------------
 
     def _apply_action(self, action: list):
-        # La accion llega NORMALIZADA en [-1, 1] por rueda. Se remapea a
-        # [WHEEL_MIN_SPEED, WHEEL_MAX_SPEED] (ambas positivas): -1 -> minima,
-        # +1 -> maxima. Asi el robot nunca retrocede ni frena del todo.
-        left_n  = float(np.clip(action[0], -1.0, 1.0))
-        right_n = float(np.clip(action[1], -1.0, 1.0))
-        span = WHEEL_MAX_SPEED - WHEEL_MIN_SPEED
-        left  = WHEEL_MIN_SPEED + (left_n  + 1.0) * 0.5 * span
-        right = WHEEL_MIN_SPEED + (right_n + 1.0) * 0.5 * span
-        self.left_motor.setVelocity(left)
-        self.right_motor.setVelocity(right)
+        # Accion estilo DeepRacer: [steering, speed], normalizada en [-1, 1].
+        # steering -> angulo de las ruedas delanteras (direccion paralela en fase 1).
+        # speed    -> velocidad de las ruedas traseras, SIEMPRE positiva.
+        steer_n = float(np.clip(action[0], -1.0, 1.0))
+        speed_n = float(np.clip(action[1], -1.0, 1.0))
+        delta = steer_n * MAX_STEER_ANGLE
+        left_angle, right_angle = ackermann_angles(delta)
+        speed = WHEEL_MIN_SPEED + (speed_n + 1.0) * 0.5 * (WHEEL_MAX_SPEED - WHEEL_MIN_SPEED)
+        self.left_steer_motor.setPosition(left_angle)
+        self.right_steer_motor.setPosition(right_angle)
+        self.left_rear_motor.setVelocity(speed)
+        self.right_rear_motor.setVelocity(speed)
 
     def _stop_motors(self):
-        self.left_motor.setVelocity(0.0)
-        self.right_motor.setVelocity(0.0)
+        self.left_rear_motor.setVelocity(0.0)
+        self.right_rear_motor.setVelocity(0.0)
+        self.left_steer_motor.setPosition(0.0)
+        self.right_steer_motor.setPosition(0.0)
 
     def _read_wheel_state(self) -> list:
         # TODO: leer velocidades de rueda y normalizar

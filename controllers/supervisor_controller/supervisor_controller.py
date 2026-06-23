@@ -92,6 +92,10 @@ OFFTRACK_PENALTY = read_env_value("OFFTRACK_PENALTY", -1.0)
 LINE_LOST_PENALTY = read_env_value("LINE_LOST_PENALTY", -0.3)
 # Steps consecutivos sin ver el carril antes de terminar el episodio.
 LOST_LINE_MAX_STEPS = read_env_value("LOST_LINE_MAX_STEPS", 20, int)
+# Steps consecutivos con pasto en el centro antes de declarar off-track (gracia para
+# curvas: en un giro la camara puede quedar mirando el pasto un instante sin haberse
+# salido). 1 = comportamiento inmediato anterior. evaluate.py lo puede subir por flag.
+OFFTRACK_MAX_STEPS = read_env_value("OFFTRACK_MAX_STEPS", 3, int)
 
 # ----------------------------------------------------------------------------
 # Progreso por gates (si el track tiene "gates" en spawns.json). Reemplaza al
@@ -120,6 +124,11 @@ START_LINE_HALF_WIDTH = read_env_value("START_LINE_HALF_WIDTH", 0.5)
 # Distancia (m) hacia adelante que el robot debe alejarse de la linea para "armar"
 # la deteccion (evita contar la largada inicial como vuelta).
 START_LINE_ARM_DISTANCE = read_env_value("START_LINE_ARM_DISTANCE", 0.5)
+
+# Tipo de conduccion del robot del world: "ackermann" (auto) o "differential" (e-puck).
+# Filtra el pool de tracks de spawns.json: solo se usan los del mismo "drive". Lo setea
+# trainer/evaluate al lanzar Webots; por defecto sale del .env.
+DRIVE_TYPE = read_env_value("DRIVE_TYPE", "differential", str)
 
 
 class SupervisorController:
@@ -169,6 +178,7 @@ class SupervisorController:
         self.episode_id = 0
         self.episode_step = 0
         self.lost_line_steps = 0
+        self.offtrack_steps = 0
         self.policy_runner = PolicyRunner()
         self.policy_status = self.policy_runner.status_dict()
         self.policy_debug_snapshot = None
@@ -505,6 +515,7 @@ class SupervisorController:
         # estado de carril (si no, contamina el siguiente episodio).
         self.policy_runner.reset_stack()
         self.lost_line_steps = 0
+        self.offtrack_steps = 0
         self.last_reward_breakdown = None
 
     def _capture_debug_frame(self, mode=None):
@@ -717,6 +728,10 @@ class SupervisorController:
         valid = []
         for track in tracks or []:
             texture = track.get("texture") if isinstance(track, dict) else None
+            # Solo tracks del tipo de conduccion activo (ackermann vs differential).
+            drive = track.get("drive", "differential") if isinstance(track, dict) else None
+            if drive != DRIVE_TYPE:
+                continue
             # Tracks marcados "eval": true son SOLO para evaluacion (rl/evaluate.py los
             # fuerza por su cuenta); se excluyen del pool de entrenamiento.
             if isinstance(track, dict) and track.get("eval"):
@@ -757,7 +772,8 @@ class SupervisorController:
             return None
         total_spawns = sum(len(t["spawns"]) for t in valid)
         log_supervisor(
-            f"[Supervisor] spawns.json: {len(valid)} tracks, {total_spawns} spawns.",
+            f"[Supervisor] spawns.json (drive={DRIVE_TYPE}): {len(valid)} tracks, "
+            f"{total_spawns} spawns.",
             force=True,
         )
         return valid
@@ -895,6 +911,7 @@ class SupervisorController:
         self.episode_step = 0
         # Nuevo episodio: limpiar estado de carril, progreso y el stack de la policy.
         self.lost_line_steps = 0
+        self.offtrack_steps = 0
         self._init_progress()
         self.last_reward_breakdown = None
         self.policy_runner.reset_stack()
@@ -948,13 +965,8 @@ class SupervisorController:
                 green_center=green_center, white_center=white_center, line_visible=line_visible,
             )
 
-        # --- Off-track: pasto en el centro => terminal. ---
-        if has_features and green_center >= OFFTRACK_GREEN_FRAC:
-            return self._reward_dict(
-                reward=float(OFFTRACK_PENALTY), terminated=True, term_reason="offtrack_grass",
-                clearance=clearance, offset=offset, speed=speed_fwd, progress=progress_delta,
-                green_center=green_center, white_center=white_center, line_visible=line_visible,
-            )
+        # Off-track (pasto en el centro) NO termina aca: el step handler aplica un
+        # debounce (OFFTRACK_MAX_STEPS) para no cortar por un frame de pasto en curva.
 
         # --- Avance: PROGRESO sobre el circuito (si hay gates) o velocidad vision. ---
         # Gateado por clearance: solo cobra fuerte avanzando Y sobre la calzada.
@@ -1033,7 +1045,17 @@ class SupervisorController:
         else:
             self.lost_line_steps += 1
 
+        # Off-track: pasto sostenido en el centro (debounce para curvas).
+        if breakdown["green_center"] >= OFFTRACK_GREEN_FRAC:
+            self.offtrack_steps += 1
+        else:
+            self.offtrack_steps = 0
+
         terminated = breakdown["terminated"]
+        if not terminated and self.offtrack_steps >= OFFTRACK_MAX_STEPS:
+            terminated = True
+            breakdown["term_reason"] = "offtrack_grass"
+            breakdown["reward"] = round(float(OFFTRACK_PENALTY), 4)
         if not terminated and self.lost_line_steps >= LOST_LINE_MAX_STEPS:
             terminated = True
             breakdown["term_reason"] = "line_lost"
@@ -1055,6 +1077,7 @@ class SupervisorController:
                 "reward_breakdown": breakdown,
                 "episode_step": self.episode_step,
                 "lost_line_steps": self.lost_line_steps,
+                "offtrack_steps": self.offtrack_steps,
                 "track": self.current_track_texture,
                 "cumulative_progress": round(self.cumulative_progress, 4),
             },
