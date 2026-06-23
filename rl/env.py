@@ -3,7 +3,7 @@ import gymnasium as gym
 import numpy as np
 from helpers.read_env_value import read_env_value
 from helpers.supervisor_socket_bridge import SupervisorSocketBridge
-from helpers.image_obs import build_image_space, decode_image_observation
+from helpers.geom_obs import build_geom_space, GEOM_OBS_SIZE, GEOM_BOUND
 #
 DEFAULT_HOST = read_env_value("DEFAULT_HOST", "127.0.0.1", str)
 DEFAULT_PORT = read_env_value("DEFAULT_PORT", 10001, int)
@@ -32,22 +32,10 @@ class NavEnv(gym.Env):
         self.action_high = 1.0
         self.default_reset_options = {}
 
-        # Espacio de observación.
-        # La idea es que el agente aprenda a navegar hacia la meta.
-        # Solo necesia información sobre el estado de las ruedas y la dirección hacia la meta (respecto a si mismo).
-        observation_spaces = {
-            # Velocidad del cuerpo en frame local, normalizada: [forward, yaw_rate].
-            # forward~0 con accion grande => trabado; yaw distingue girar de empujar.
-            "velocity": gym.spaces.Box(
-                low=np.full(self.velocity_size, -1.0, dtype=np.float32),
-                high=np.full(self.velocity_size, 1.0, dtype=np.float32),
-                shape=(self.velocity_size,),
-                dtype=np.float32,
-            ),
-            # Imagen de la camara frontal (RGB, channel-first) — Level 3+.
-            "image": build_image_space(),
-        }
-        self.observation_space = gym.spaces.Dict(observation_spaces)
+        # Espacio de observación: VECTOR GEOMETRICO (sin imagen). El supervisor lo
+        # calcula desde la centerline de gates + la pose: velocidad, error lateral,
+        # error de rumbo y look-ahead local. Full observable -> no se pierde el sentido.
+        self.observation_space = build_geom_space()
         # Espacio de acción.
         # Vector de 2 elementos (rueda izq/der) NORMALIZADO en [-1.0, 1.0].
         # -1 = full reversa, +1 = full adelante; el robot lo escala a rad/s.
@@ -64,18 +52,12 @@ class NavEnv(gym.Env):
                 "La observacion del supervisor no tiene el formato esperado."
             )
 
-        velocity_payload = observation_payload.get("velocity", [0.0] * self.velocity_size)
-
-        velocity = np.asarray(velocity_payload, dtype=np.float32)
-        if velocity.shape != (self.velocity_size,):
-            raise RuntimeError(f"velocity invalido: {velocity_payload}")
-
-        image = decode_image_observation(observation_payload.get("image"))
-
-        observation = {
-            "velocity": velocity,
-            "image": image,
-        }
+        geometry = observation_payload.get("geometry")
+        observation = np.asarray(geometry, dtype=np.float32)
+        if observation.shape != (GEOM_OBS_SIZE,):
+            raise RuntimeError(f"geometry invalido: {geometry}")
+        # Clip defensivo a la cota del Box (el supervisor ya clampea, pero por las dudas).
+        observation = np.clip(observation, -GEOM_BOUND, GEOM_BOUND).astype(np.float32)
         self._validate_observation(observation)
         return observation
 

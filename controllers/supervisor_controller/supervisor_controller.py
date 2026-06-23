@@ -14,8 +14,9 @@ from helpers.read_env_value import read_env_value
 from helpers.training_server import TrainingServer
 from helpers.policy_runner import PolicyRunner
 from helpers.image_obs import blank_image_payload
-from helpers.lane_vision import decode_rgb_hwc, detect_lane
+from helpers.lane_vision import decode_rgb_hwc, detect_lane, road_band_offsets
 from helpers.track_progress import build_loop, project_s, signed_delta
+from helpers.geom_obs import GEOM_BANDS, GEOM_BOUND, blank_geom
 
 
 # Domain randomization de la pose del robot al inicio de cada episodio: jitter de
@@ -1015,7 +1016,9 @@ class SupervisorController:
         self._refresh_robot_observation()
         self.episode_step += 1
 
-        # Progreso sobre el circuito (si el track tiene gates).
+        # Progreso sobre el circuito (si el track tiene gates). La obs del agente es
+        # percepcion local; el progreso/contramano son info PRIVILEGIADA del supervisor
+        # (no entra en la observacion) -> el reward queda identico al de la rama vision.
         progress_delta, lap_done = self._update_progress()
         # Sin gates: deteccion de vuelta por cruce de la linea de meta unica.
         if not lap_done and self.current_loop is None:
@@ -1077,12 +1080,45 @@ class SupervisorController:
         return self.last_observation_image
 
     def _build_nav_observation(self) -> dict:
-        # Vision-pura: la obs es {image, velocity}.
-        observation = {
-            "velocity": self._compute_velocity(),
-            "image": self.last_observation_image or blank_image_payload(),
-        }
-        return observation
+        # Rama geometrica: la obs es un VECTOR de features (sin imagen).
+        return {"geometry": self._compute_geometry_obs()}
+
+    def _perception_features(self):
+        """
+        Features LOCALES de la imagen de camara de este timestep (helpers/lane_vision).
+        Devuelve el dict de detect_lane + 'band_offsets' (look-ahead en la imagen), o None
+        si no hay frame valido. NO usa geometria global del track -> track-agnostico.
+        """
+        try:
+            rgb = decode_rgb_hwc(self.last_observation_image)
+            if rgb is None:
+                return None
+            feats = detect_lane(rgb)
+            feats["band_offsets"] = road_band_offsets(rgb, GEOM_BANDS)
+            return feats
+        except Exception as exc:  # noqa: BLE001
+            log_supervisor(f"[Supervisor] error en features de percepcion: {exc}", force=True)
+            return None
+
+    def _compute_geometry_obs(self):
+        """Vector de observacion = metricas derivadas de la imagen (ver helpers/geom_obs)."""
+        vel = self._compute_velocity()  # [forward, yaw_rate], ya ~[-1, 1] (proprioceptivo)
+        feats = self._perception_features()
+        if feats is None:
+            return blank_geom()
+        b = GEOM_BOUND
+        clip = lambda v: max(-b, min(b, float(v)))
+        obs = [
+            clip(vel[0]), clip(vel[1]),
+            clip(feats.get("road_frac", 0.0)),
+            clip(feats.get("center_green", 0.0)),
+        ]
+        for off in feats.get("band_offsets", []):
+            obs.append(clip(off))
+        # Asegurar el tamanio exacto (por si band_offsets viniera corto).
+        target = 4 + GEOM_BANDS
+        obs += [0.0] * (target - len(obs))
+        return obs[:target]
 
     
 

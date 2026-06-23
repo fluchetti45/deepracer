@@ -60,6 +60,25 @@ def project_s(loop, point):
     return best_s
 
 
+def point_and_tangent(loop, s):
+    """
+    Punto (x, y) y tangente unitaria (dx, dy) sobre la polilinea cerrada en arc-length
+    `s` (modulo el perimetro). La tangente apunta en el sentido de avance (orden de los
+    gates). Se usa para las features geometricas (error lateral, rumbo, look-ahead).
+    """
+    pts, cumlen, total = loop
+    s = s % total
+    for i in range(len(pts) - 1):
+        if cumlen[i + 1] >= s:
+            seg = pts[i + 1] - pts[i]
+            seg_len = cumlen[i + 1] - cumlen[i]
+            t = 0.0 if seg_len <= 1e-9 else (s - cumlen[i]) / seg_len
+            point = pts[i] + t * seg
+            norm = float(np.hypot(seg[0], seg[1])) or 1.0
+            return (float(point[0]), float(point[1])), (float(seg[0] / norm), float(seg[1] / norm))
+    return (float(pts[-1][0]), float(pts[-1][1])), (1.0, 0.0)
+
+
 def signed_delta(s_prev, s_cur, total):
     """
     Delta de arc-length mas corto sobre el loop (maneja el wrap del cierre): el

@@ -455,13 +455,6 @@ def build_vec_env(
     if isinstance(ports, int):
         ports = [ports]
 
-    # Shape de la imagen de UN frame (antes de stackear): RND opera sobre el frame mas
-    # nuevo, asi que necesita esta shape para construir sus redes. La leo de un env
-    # "sonda" construido sin conectar (el observation_space sale del .env, no del sim).
-    probe_env = build_env(host, ports[0], monitor=False)
-    base_image_shape = tuple(probe_env.observation_space.spaces["image"].shape)
-    probe_env.close()
-
     # Una factory por puerto. Cada NavEnv recibe SU puerto como argumento (no por env var),
     # asi cada worker se conecta a la instancia de Webots correcta.
     env_fns = [
@@ -480,11 +473,11 @@ def build_vec_env(
         vec_env.training = True
         vec_env.norm_reward = bool(norm_reward)
     else:
+        # Obs geometrica = Box plano: se normaliza ENTERO (sin norm_obs_keys).
         vec_env = VecNormalize(
             vec_env,
             norm_obs=True,
             norm_reward=bool(norm_reward),
-            norm_obs_keys=["velocity"],
         )
 
     # Frame stacking: apila los ultimos n_stack frames para dar info TEMPORAL.
@@ -571,7 +564,7 @@ def build_model(args, vec_env, run_paths):
     }
 
     model = PPO(
-            "MultiInputPolicy",
+            "MlpPolicy",  # obs geometrica = Box plano (sin imagen) -> MLP, no CNN
             vec_env,
             verbose=1,
             **model_kwargs,
