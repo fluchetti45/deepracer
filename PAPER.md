@@ -1,7 +1,7 @@
 # Conducción autónoma estilo DeepRacer en Webots: el rol de la representación de la observación
 
 > Informe técnico / paper en progreso.
-> Las secciones de **Resultados** están como *placeholder*: se completan tras correr
+> Las secciones de **Resultados** están como _placeholder_: se completan tras correr
 > varias seeds por variante y agregar estadísticas.
 
 ---
@@ -11,10 +11,10 @@
 Entrenamos un agente de conducción autónoma sobre pistas estilo AWS DeepRacer
 simuladas en Webots, usando **PPO** (Proximal Policy Optimization). El objetivo es
 **aislar el efecto de la representación de la observación** sobre el desempeño,
-manteniendo *todo lo demás constante*: mismo robot, mismo espacio de acción, mismas
+manteniendo _todo lo demás constante_: mismo robot, mismo espacio de acción, mismas
 pistas, mismos hiperparámetros y —crucialmente— **la misma función de reward**.
 
-Comparamos tres variantes que solo difieren en *qué ve el agente*:
+Comparamos tres variantes que solo difieren en _qué ve el agente_:
 
 1. **Geométrica** — la observación es un vector de **métricas derivadas localmente de
    la imagen** (no los píxeles).
@@ -23,8 +23,8 @@ Comparamos tres variantes que solo difieren en *qué ve el agente*:
    temporal).
 
 El reward usa **información privilegiada del simulador** (progreso sobre el circuito,
-detección de vuelta y de contramano) que el agente **no** recibe en su observación.
-Esto convierte el experimento en un *ablation* limpio sobre la representación de
+detección de vuelta completa y de conduccion en sentido contrario) que el agente **no** recibe en su observación.
+Esto convierte el experimento en un _ablation_ limpio sobre la representación de
 entrada.
 
 ---
@@ -33,7 +33,7 @@ entrada.
 
 El problema es de **seguimiento de pista**: un robot debe recorrer un circuito cerrado
 lo más rápido posible sin salirse a la zona de pasto. La pista sigue el modelo
-DeepRacer: asfalto gris delimitado por **bordes blancos**, con una **línea amarilla
+DeepRacer: asfalto negro delimitado por **bordes blancos**, con una **línea amarilla
 central decorativa** (pisable), rodeada de **pasto verde** (fuera de pista).
 
 La pregunta de investigación es:
@@ -42,7 +42,7 @@ La pregunta de investigación es:
 > ¿Conviene diseñar features a mano sobre la imagen, dárselos crudos a una CNN, o
 > agregar memoria temporal apilando frames?
 
-Para que la comparación sea atribuible *solo* a la observación, fijamos un entorno y un
+Para que la comparación sea atribuible _solo_ a la observación, fijamos un entorno y un
 reward idénticos entre las tres variantes (Sección 3) y variamos únicamente el bloque de
 observación + el extractor de features de la política (Sección 4).
 
@@ -54,8 +54,8 @@ Modelamos la tarea como un **MDP de horizonte finito** resuelto con PPO.
 
 - **Estado del simulador**: pose y velocidad del robot, imagen de la cámara frontal,
   textura/geometría de la pista activa.
-- **Observación del agente** `oₜ`: depende de la variante (Sección 4). Es una *vista
-  parcial* del estado.
+- **Observación del agente** `oₜ`: depende de la variante (Sección 4). Es una _vista
+  parcial_ del estado.
 - **Acción** `aₜ`: comando continuo de las dos ruedas (Sección 4.4).
 - **Reward** `rₜ`: función del progreso sobre el circuito y de la seguridad
   (Sección 3.3). **Idéntica entre variantes.**
@@ -64,20 +64,18 @@ Modelamos la tarea como un **MDP de horizonte finito** resuelto con PPO.
 
 ### 2.1 Robot y simulador
 
-| Ítem | Valor |
-|---|---|
-| Simulador | Webots R2025a |
-| Arena | `RectangleArena` 8×8 m, multi-pista por *swap* de textura del piso |
-| Robot | e-puck, tracción **diferencial** (2 ruedas) |
-| Radio de rueda | 0.02 m |
-| Velocidad lineal máx. | ~0.1 m/s |
-| Cámara | frontal, RGB **84×84**, montada mirando levemente hacia abajo |
-| Frame-skip (`ACTION_REPEAT`) | 5 ticks por acción |
-| Pasos máx. por episodio | 1000 (`MAX_EPISODE_STEPS`) |
-| Domain randomization | jitter de pose sobre el spawn al inicio del episodio |
+| Ítem                         | Valor                                                              |
+| ---------------------------- | ------------------------------------------------------------------ |
+| Simulador                    | Webots R2025a                                                      |
+| Arena                        | `RectangleArena` 8×8 m, multi-pista por _swap_ de textura del piso |
+| Robot                        | e-puck, tracción **diferencial** (2 ruedas)                        |
+| Cámara                       | frontal, RGB **84×84**, montada mirando levemente hacia abajo      |
+| Frame-skip (`ACTION_REPEAT`) | 5 ticks por acción                                                 |
+| Pasos máx. por episodio      | 1000 (`MAX_EPISODE_STEPS`)                                         |
+| Domain randomization         | jitter de pose sobre el spawn al inicio del episodio               |
 
 > **Nota de generalización**: el entrenamiento usa varias pistas (`track1`–`track3`) y
-> la evaluación pistas *held-out* (`track4`–`track5`), nunca vistas en entrenamiento.
+> la evaluación pistas _held-out_ (`track4`–`track5`), nunca vistas en entrenamiento.
 
 ---
 
@@ -93,29 +91,28 @@ entorno es idéntico en las tres variantes**, salvo la observación.
 - El **trainer** (PPO, Stable-Baselines3) se conecta por socket: manda acciones,
   recibe `(observación, reward, terminated, truncated, info)`.
 
-El supervisor es la **única fuente de verdad** del reward (`_compute_reward_breakdown`),
-usada tanto en entrenamiento como en el panel de debug.
+El supervisor es la **única fuente de verdad** del reward (`_compute_reward_breakdown`).
 
 ### 3.2 Información privilegiada (asymmetric information)
 
-Punto clave del diseño: **el reward puede mirar información que el agente no observa.**
+**El reward puede mirar información que el agente no observa.**
 El supervisor conoce el estado completo del simulador y lo usa para construir un reward
-*denso y bien orientado*, pero esa información **no entra en la observación**:
+_denso y bien orientado_, pero esa información **no entra en la observación**:
 
-| Señal privilegiada | Cómo se obtiene | ¿Entra en la obs? |
-|---|---|---|
-| **Progreso sobre el circuito** (Δarc-length) | Proyección de la pose `(x,y)` sobre la poligonal de *gates* del track (`project_s`) | **No** |
-| **Vuelta completa** | Progreso acumulado ≥ perímetro (o cruce de la línea de meta del spawn) | **No** |
-| **Contramano** | Δarc-length negativo sostenido | **No** |
-| **Pose/velocidad ground-truth** | API del supervisor de Webots | Solo velocidad propia* |
+| Señal privilegiada                           | Cómo se obtiene                                                                     | ¿Entra en la obs?       |
+| -------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------- |
+| **Progreso sobre el circuito** (Δarc-length) | Proyección de la pose `(x,y)` sobre la poligonal de _gates_ del track (`project_s`) | **No**                  |
+| **Vuelta completa**                          | Progreso acumulado ≥ perímetro (o cruce de la línea de meta del spawn)              | **No**                  |
+| **Contramano**                               | Δarc-length negativo sostenido                                                      | **No**                  |
+| **Pose/velocidad ground-truth**              | API del supervisor de Webots                                                        | Solo velocidad propia\* |
 
 \* La velocidad propia `[forward, yaw_rate]` sí entra (es propioceptiva, un sensor real
 del robot); la **geometría global del track no**.
 
-Esto es **privileged reward shaping** / *asymmetric actor*: una técnica estándar donde
+Esto es **privileged reward shaping** / _asymmetric actor_: una técnica estándar donde
 el reward usa información de oráculo en entrenamiento, pero la política aprende a actuar
 solo con su observación parcial. Permite un reward con **sentido de dirección** (premia
-avanzar *en el sentido correcto del circuito*, no solo ir rápido) sin filtrar esa
+avanzar _en el sentido correcto del circuito_, no solo ir rápido) sin filtrar esa
 información a la entrada del agente.
 
 ### 3.3 Función de reward
@@ -142,22 +139,22 @@ terminación adicional:
 Donde:
 
 - **`clearance`** = fracción de calzada en la banda central de la imagen (∈ [0,1]):
-  *gate* multiplicativo, solo se cobra fuerte yendo **centrado**.
+  _gate_ multiplicativo, solo se cobra fuerte yendo **centrado**.
 - **`Δs_norm`** = progreso normalizado sobre el circuito (privilegiado). Reemplaza a la
-  velocidad cruda como motor del avance → no premia *loopear* ni ir en contramano.
+  velocidad cruda como motor del avance → no premia _loopear_ ni ir en contramano.
 - **`offset`, `white_center`, `green_center`** = features de color de la imagen
   (centroide de la calzada, blanco/verde en el centro).
 
-| Parámetro | Valor | Significado |
-|---|---|---|
-| `LAP_BONUS` | +5.0 | bonus terminal por vuelta |
-| `OFFTRACK_PENALTY` | −1.0 | penalización terminal por salir a pasto |
-| `OFFTRACK_GREEN_FRAC` | 0.4 | umbral de pasto-en-centro para declarar salida |
-| `REWARD_PROGRESS_W` | 1.0 | peso del progreso |
-| `WRONG_WAY_PENALTY` | −1.0 a −1.5 | penalización terminal por contramano |
-| `WRONG_WAY_MAX_STEPS` | 12–30 | pasos de retroceso antes de cortar |
-| `REWARD_OFFSET_W`, `REWARD_WHITE_W` | 0.0 | penas laterales (desactivadas) |
-| `REWARD_STEP_COST` | 0.0–0.03 | costo por step |
+| Parámetro                           | Valor       | Significado                                    |
+| ----------------------------------- | ----------- | ---------------------------------------------- |
+| `LAP_BONUS`                         | +5.0        | bonus terminal por vuelta                      |
+| `OFFTRACK_PENALTY`                  | −1.0        | penalización terminal por salir a pasto        |
+| `OFFTRACK_GREEN_FRAC`               | 0.4         | umbral de pasto-en-centro para declarar salida |
+| `REWARD_PROGRESS_W`                 | 1.0         | peso del progreso                              |
+| `WRONG_WAY_PENALTY`                 | −1.0 a −1.5 | penalización terminal por contramano           |
+| `WRONG_WAY_MAX_STEPS`               | 12–30       | pasos de retroceso antes de cortar             |
+| `REWARD_OFFSET_W`, `REWARD_WHITE_W` | 0.0         | penas laterales (desactivadas)                 |
+| `REWARD_STEP_COST`                  | 0.0–0.03    | costo por step                                 |
 
 > **Implicación experimental**: como el reward y la terminación son idénticos, cualquier
 > diferencia de desempeño entre variantes es atribuible a **la observación y su
@@ -172,15 +169,15 @@ Las tres variantes comparten robot, acción, pistas, reward e hiperparámetros d
 
 ### 4.1 Tabla comparativa
 
-| | **Geométrica** | **Visión (1 frame)** | **Visión apilada (4 frames)** |
-|---|---|---|---|
-| **Rama git** | `geometrica` | `master`, `--n-stack 1` | `master`, `--n-stack 4` |
-| **Observación** | Vector `Box(9)` de métricas de imagen | `Dict{image: 3×84×84, velocity: 2}` | `Dict{image: 12×84×84, velocity: 8}` |
-| **Origen de la obs** | Métricas calculadas **localmente** sobre el frame | Píxeles crudos + velocidad | 4 frames + 4 velocidades apilados |
-| **Política SB3** | `MlpPolicy` | `MultiInputPolicy` | `MultiInputPolicy` |
-| **Extractor** | MLP | CNN (NatureCNN) + MLP | CNN (NatureCNN) + MLP |
-| **Info temporal** | Solo velocidad propia | Solo velocidad propia | **Sí** (4 frames) |
-| **Normalización obs** | VecNormalize sobre todo el vector | VecNormalize solo en `velocity`; imagen /255 | ídem |
+|                       | **Geométrica**                                    | **Visión (1 frame)**                         | **Visión apilada (4 frames)**        |
+| --------------------- | ------------------------------------------------- | -------------------------------------------- | ------------------------------------ |
+| **Rama git**          | `geometrica`                                      | `master`, `--n-stack 1`                      | `master`, `--n-stack 4`              |
+| **Observación**       | Vector `Box(9)` de métricas de imagen             | `Dict{image: 3×84×84, velocity: 2}`          | `Dict{image: 12×84×84, velocity: 8}` |
+| **Origen de la obs**  | Métricas calculadas **localmente** sobre el frame | Píxeles crudos + velocidad                   | 4 frames + 4 velocidades apilados    |
+| **Política SB3**      | `MlpPolicy`                                       | `MultiInputPolicy`                           | `MultiInputPolicy`                   |
+| **Extractor**         | MLP                                               | CNN (NatureCNN) + MLP                        | CNN (NatureCNN) + MLP                |
+| **Info temporal**     | Solo velocidad propia                             | Solo velocidad propia                        | **Sí** (4 frames)                    |
+| **Normalización obs** | VecNormalize sobre todo el vector                 | VecNormalize solo en `velocity`; imagen /255 | ídem                                 |
 
 ### 4.2 Observación — Geométrica
 
@@ -197,7 +194,7 @@ de la cámara en ese timestep (track-agnóstico, no usa geometría global):
 
 Las features se calculan por clasificación de color (asfalto+amarillo = calzada;
 blanco = borde; verde = pasto) sobre la franja inferior del frame. Los `off_i` trazan
-*hacia dónde va la pista adelante* (look-ahead en la imagen), sin waypoints ni geometría
+_hacia dónde va la pista adelante_ (look-ahead en la imagen), sin waypoints ni geometría
 del circuito.
 
 ### 4.3 Observación — Visión y Visión apilada
@@ -218,9 +215,7 @@ Vector continuo de **2 dimensiones** `Box([-1,1]²)`: `[rueda_izq, rueda_der]`.
 
 - El robot mapea cada componente de `[-1, 1]` a velocidad de rueda en
   `[WHEEL_MIN_SPEED, WHEEL_MAX_SPEED] = [1.5, 5.0]` rad/s.
-- **Ambas siempre positivas**: el robot **no puede frenar ni ir en reversa**. Esto
-  simplifica la exploración ("rápido + centrado" ≡ "recorrer la pista rápido") y evita
-  que el agente choque a propósito para terminar el episodio.
+- **Ambas siempre positivas**: el robot **no puede frenar ni ir en reversa**.
 
 ### 4.5 Modelo y entrenamiento (idéntico en las tres)
 
@@ -232,21 +227,18 @@ Vector continuo de **2 dimensiones** `Box([-1,1]²)`: `[rueda_izq, rueda_der]`.
   cruda /255). Opcionalmente normaliza el reward.
 - **Hiperparámetros** (defaults del trainer):
 
-| Hiperparámetro | Valor |
-|---|---|
-| `learning_rate` | 5e-4 |
-| `n_steps` | 1024 |
-| `batch_size` | 128 |
-| `n_epochs` | 5 |
-| `gamma` | 0.995 |
-| `target_kl` | 0.02 |
-| `ent_coef` | 0.02 |
-| `vf_coef` | 0.5 |
-| `clip_range` | 0.2 |
-| `max_grad_norm` | 0.5 |
-
-> El `gamma` alto (0.995) es deliberado: el reward es semi-disperso (el `LAP_BONUS`
-> terminal debe propagarse hacia atrás muchos pasos).
+| Hiperparámetro  | Valor |
+| --------------- | ----- |
+| `learning_rate` | 5e-4  |
+| `n_steps`       | 1024  |
+| `batch_size`    | 128   |
+| `n_epochs`      | 5     |
+| `gamma`         | 0.995 |
+| `target_kl`     | 0.02  |
+| `ent_coef`      | 0.02  |
+| `vf_coef`       | 0.5   |
+| `clip_range`    | 0.2   |
+| `max_grad_norm` | 0.5   |
 
 ---
 
@@ -277,23 +269,43 @@ python -m rl.trainer --n-stack 1 --webots-world worlds/track1.wbt --seed <S>
 
 ### 5.3 Evaluación
 
-Sobre pistas *held-out* (`track4`, `track5`), con el modelo final de cada seed:
+Sobre pistas _held-out_ (`track4`, `track5`), con el modelo final de cada seed:
 
 ```bash
-python -m rl.evaluate --run <run_dir>        # todas las pistas de eval
+python -m rl.evaluate --model <run_dir>      # todas las pistas de eval
 ```
+
+La evaluación **guarda las métricas** en `<run_dir>/eval_results_<timestamp>.json`
+(una entrada por track), para poder agregar entre seeds.
 
 ### 5.4 Métricas
 
-| Métrica | Definición |
-|---|---|
-| **Tasa de vuelta** (lap rate) | % de episodios que completan una vuelta |
-| **Tiempo a vuelta** | pasos/segundos hasta completar la vuelta (solo éxitos) |
-| **Tasa off-track** | % de episodios terminados por salir a pasto |
-| **Tasa contramano** | % terminados por contramano |
-| **Tasa carril perdido** | % terminados por perder la pista |
-| **Reward medio / episodio** | retorno promedio |
-| **Eficiencia de muestras** | timesteps hasta alcanzar X% de lap rate |
+**Convención**: cada métrica se mide en entrenamiento **[TRAIN]** (sobre las pistas
+vistas, durante los rollouts) y/o en evaluación **[EVAL]** (sobre pistas held-out, con
+el modelo final). Miden cosas distintas: TRAIN = *cuán rápido y bien aprende*; EVAL =
+*cuán bien generaliza*.
+
+**Dónde se guardan**:
+
+- **[TRAIN]** → **TensorBoard** en `<run_dir>/tensorboard/` (namespace `custom/`),
+  logueado por `RLMetricsCallback`.
+- **[EVAL]** → **JSON** en `<run_dir>/eval_results_<timestamp>.json`, escrito por
+  `rl/evaluate.py`.
+
+| Métrica                       | Definición                                             | Fuente                                                          |
+| ----------------------------- | ------------------------------------------------------ | -------------------------------------------------------------- |
+| **Tasa de vuelta** (lap rate) | % de episodios que completan una vuelta                | **[EVAL]** `lap_rate` · **[TRAIN]** `custom/lap_rate`          |
+| **Tiempo a vuelta**           | pasos/segundos hasta completar la vuelta (solo éxitos) | **[EVAL]** `lap_steps_mean`, `lap_time_s_mean`                 |
+| **Tasa off-track**            | % de episodios terminados por salir a pasto            | **[EVAL]** `failure_rates` · **[TRAIN]** `custom/offtrack_rate` |
+| **Tasa contramano**           | % terminados por contramano                            | **[EVAL]** `failure_rates` · **[TRAIN]** `custom/wrong_way_rate` |
+| **Tasa carril perdido**       | % terminados por perder la pista                       | **[EVAL]** `failure_rates` · **[TRAIN]** `custom/line_lost_rate` |
+| **Reward medio / episodio**   | retorno promedio                                       | **[EVAL]** `reward_ep_mean` · **[TRAIN]** `rollout/ep_rew_mean` |
+| **Eficiencia de muestras**    | timesteps hasta alcanzar X% de lap rate                | **[TRAIN]** (deriva de la curva `custom/lap_rate`)             |
+
+> **Nota metodológica**: el loop de eval corta al juntar `--laps` vueltas, por lo que
+> `lap_rate` queda calculado sobre los episodios efectivamente corridos (sesgado si el
+> modelo es bueno). Para una **tasa de éxito limpia**, correr con `--laps` alto o agregar
+> un modo de **N episodios fijos** (pendiente).
 
 ---
 
@@ -301,35 +313,37 @@ python -m rl.evaluate --run <run_dir>        # todas las pistas de eval
 
 > **PLACEHOLDER — pendiente de correr N seeds por variante y agregar estadísticas.**
 
-### 6.1 Curvas de aprendizaje
+### 6.1 Curvas de aprendizaje — **[TRAIN]**
 
 > **PLACEHOLDER**: lap rate y reward vs. timesteps, media ± desvío sobre seeds, una
 > curva por variante. (Fuente: TensorBoard `custom/lap_rate`, `custom/offtrack_rate`,
-> etc.)
+> etc., sobre las pistas de entrenamiento.)
 
 ```
 [figura: lap_rate vs timesteps — geométrica / visión / visión apilada]
 [figura: reward medio vs timesteps]
 ```
 
-### 6.2 Desempeño final (pistas held-out)
+### 6.2 Desempeño final (pistas held-out) — **[EVAL]**
 
-> **PLACEHOLDER**: completar con media ± desvío sobre N seeds.
+> **PLACEHOLDER**: completar con media ± desvío sobre N seeds. (Fuente:
+> `eval_results_*.json` de cada corrida.)
 
-| Variante | Lap rate (%) | Tiempo a vuelta | Off-track (%) | Contramano (%) | Reward/ep |
-|---|---|---|---|---|---|
-| Geométrica | — | — | — | — | — |
-| Visión (1 frame) | — | — | — | — | — |
-| Visión apilada (4) | — | — | — | — | — |
+| Variante           | Lap rate (%) | Tiempo a vuelta | Off-track (%) | Contramano (%) | Reward/ep |
+| ------------------ | ------------ | --------------- | ------------- | -------------- | --------- |
+| Geométrica         | —            | —               | —             | —              | —         |
+| Visión (1 frame)   | —            | —               | —             | —              | —         |
+| Visión apilada (4) | —            | —               | —             | —              | —         |
 
-### 6.3 Eficiencia de muestras
+### 6.3 Eficiencia de muestras — **[TRAIN]**
 
-> **PLACEHOLDER**: timesteps hasta 50% / 80% de lap rate por variante.
+> **PLACEHOLDER**: timesteps hasta 50% / 80% de lap rate por variante. (Deriva de las
+> curvas de §6.1.)
 
-### 6.4 Tests de significancia
+### 6.4 Tests de significancia — **[EVAL]**
 
 > **PLACEHOLDER**: comparación entre variantes (p. ej. Mann-Whitney U sobre las
-> métricas por seed), para sostener las afirmaciones del paper.
+> métricas de eval por seed), para sostener las afirmaciones del paper.
 
 ---
 
@@ -351,7 +365,7 @@ python -m rl.evaluate --run <run_dir>        # todas las pistas de eval
 - **La dirección de marcha no es perceptible desde una observación local.** Ni los
   features geométricos ni un solo frame codifican "para qué lado es adelante en el
   circuito". El reward lo resuelve con información **privilegiada** (progreso/contramano),
-  pero la *política* opera ciega a la dirección global: en pistas que se auto-aproximan,
+  pero la _política_ opera ciega a la dirección global: en pistas que se auto-aproximan,
   la cámara puede ver dos tramos y el agente saltar de carril. El apilado de frames
   mitiga parcialmente (da sentido de movimiento) pero no garantiza orientación global.
 - **Escala de las pistas**: diseñadas a mano (Inkscape); curvas muy cerradas pueden
@@ -374,10 +388,10 @@ python -m rl.evaluate --run <run_dir>        # todas las pistas de eval
 
 > **PLACEHOLDER** — a redactar con los resultados.
 >
-> Tesis a defender: *a igualdad de reward, robot y acción, la representación de la
+> Tesis a defender: _a igualdad de reward, robot y acción, la representación de la
 > observación es un factor de primer orden en la eficiencia y robustez del agente;
 > el diseño de features y la información temporal compensan parte de la dificultad de
-> aprender de píxeles crudos.*
+> aprender de píxeles crudos._
 
 ---
 
