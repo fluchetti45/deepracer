@@ -81,7 +81,17 @@ def parse_args():
         default=None,
         help=(
             "Tope de episodios (intentos) por si nunca completa. "
-            "Default: laps * 5 + 5."
+            "Default: laps * 5 + 5. (Solo aplica en modo --laps.)"
+        ),
+    )
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=None,
+        help=(
+            "Modo TASA DE EXITO: corre EXACTAMENTE N episodios por track, pase lo que "
+            "pase, y reporta lap_rate = vueltas/N (sin sesgo). Ignora --laps y "
+            "--max-episodes. Recomendado para el paper."
         ),
     )
     parser.add_argument(
@@ -263,6 +273,7 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
     vec_env = None
     lap_steps_list = []           # steps de las vueltas COMPLETAS
     failures = {}                 # motivo -> conteo
+    episode_rewards = []          # retorno (reward acumulado) de CADA episodio
     deterministic = not args.stochastic
     try:
         if not args.no_webots_launch:
@@ -273,18 +284,28 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
         obs = vec_env.reset()
         episode = 0
         step_in_episode = 0
+        ep_reward = 0.0
         wall_start = time.perf_counter()
         laps_done = 0
+        fixed_n = args.episodes  # None => modo "hasta --laps vueltas"
 
-        while laps_done < args.laps and episode < max_episodes:
+        while True:
+            # Corte: N episodios fijos (modo tasa de exito) o hasta juntar --laps vueltas.
+            if fixed_n is not None:
+                if episode >= fixed_n:
+                    break
+            elif laps_done >= args.laps or episode >= max_episodes:
+                break
             action, _ = model.predict(obs, deterministic=deterministic)
             obs, _rewards, dones, infos = vec_env.step(action)
             step_in_episode += 1
+            ep_reward += float(_rewards[0])  # reward real (VecNormalize no lo normaliza en eval)
 
             if not dones[0]:
                 continue
 
             episode += 1
+            episode_rewards.append(ep_reward)
             info = infos[0]
             reason = classify_done(info)
             wall = time.perf_counter() - wall_start
@@ -304,6 +325,7 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
                 )
 
             step_in_episode = 0
+            ep_reward = 0.0
             wall_start = time.perf_counter()
     finally:
         if vec_env is not None:
@@ -320,17 +342,97 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
 
     return {
         "texture": texture,
+        "episodes": episode,
         "lap_steps": lap_steps_list,
         "failures": failures,
+        "episode_rewards": episode_rewards,
         "has_gates": has_gates,
     }
+
+
+def summarize_result(result, laps_requested, dt):
+    """
+    Deriva las metricas agregadas de UN track desde el dict crudo de
+    evaluate_one_track (mismo origen para el JSON guardado y los prints).
+    """
+    lap_steps = result.get("lap_steps", [])
+    episodes = int(result.get("episodes", 0))
+    laps = len(lap_steps)
+    rewards = result.get("episode_rewards", [])
+    failures = dict(result.get("failures", {}))
+
+    summary = {
+        "texture": result["texture"],
+        "has_gates": result.get("has_gates"),
+        "episodes": episodes,
+        "laps": laps,
+        "laps_requested": int(laps_requested),
+        # NOTA: el loop corta al juntar `laps_requested` vueltas, asi que lap_rate es
+        # sobre los episodios efectivamente corridos (sesgado si el modelo es bueno).
+        # Para una tasa de exito limpia, correr con --laps alto o un nro fijo de episodios.
+        "lap_rate": (laps / episodes) if episodes else 0.0,
+        "failures": failures,
+        "failure_rates": (
+            {k: v / episodes for k, v in failures.items()} if episodes else {}
+        ),
+        "reward_ep_mean": float(np.mean(rewards)) if rewards else None,
+        "reward_ep_std": float(np.std(rewards)) if rewards else None,
+        "lap_steps": [int(s) for s in lap_steps],
+    }
+    if lap_steps:
+        steps_arr = np.asarray(lap_steps, dtype=float)
+        summary["lap_steps_mean"] = float(steps_arr.mean())
+        summary["lap_steps_min"] = int(steps_arr.min())
+        summary["lap_steps_max"] = int(steps_arr.max())
+        summary["lap_time_s_mean"] = float(steps_arr.mean() * dt)
+    else:
+        summary["lap_steps_mean"] = None
+        summary["lap_steps_min"] = None
+        summary["lap_steps_max"] = None
+        summary["lap_time_s_mean"] = None
+    return summary
+
+
+def save_eval_results(args, model_zip, n_stack, results):
+    """
+    Persiste las metricas de eval a un JSON dentro de la carpeta de la corrida (o al
+    lado del .zip), para poder agregar entre seeds despues. Devuelve la ruta.
+    """
+    model_path = os.path.abspath(args.model)
+    out_dir = model_path if os.path.isdir(model_path) else os.path.dirname(model_zip)
+    stamp = time.strftime("%Y%m%d%H%M%S")
+    out_path = os.path.join(out_dir, f"eval_results_{stamp}.json")
+    payload = {
+        "model": os.path.abspath(model_zip),
+        "n_stack": int(n_stack),
+        "laps_requested": int(args.laps),
+        "max_episode_steps": int(args.max_episode_steps),
+        "deterministic": not args.stochastic,
+        "dt": float(args.dt),
+        "tracks": [summarize_result(r, args.laps, args.dt) for r in results],
+    }
+    with open(out_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=True)
+    print(f"\nMetricas de eval guardadas en: {out_path}")
+    return out_path
 
 
 def print_track_summary(result, args):
     """Resumen por track."""
     lap_steps = result["lap_steps"]
+    episodes = int(result.get("episodes", 0))
+    rewards = result.get("episode_rewards", [])
     print("-" * 56)
-    print(f"  vueltas: {len(lap_steps)} / {args.laps} pedidas")
+    if args.episodes is not None:
+        print(f"  vueltas: {len(lap_steps)} en {args.episodes} episodios")
+    else:
+        print(f"  vueltas: {len(lap_steps)} / {args.laps} pedidas")
+    if episodes:
+        print(f"  lap rate     : {len(lap_steps)}/{episodes} episodios "
+              f"({100.0 * len(lap_steps) / episodes:.0f}%)")
+    if rewards:
+        print(f"  reward/ep    : prom {np.mean(rewards):6.2f}  desv {np.std(rewards):.2f}  "
+              f"(n={len(rewards)})")
     if lap_steps:
         steps_arr = np.asarray(lap_steps, dtype=float)
         print(
@@ -395,11 +497,15 @@ def run_evaluation(args):
     os.environ["DOMAIN_RANDOMIZATION_ENABLED"] = "0"
     os.environ["MAX_EPISODE_STEPS"] = str(int(args.max_episode_steps))
 
+    if args.episodes is not None:
+        modo_txt = f"{args.episodes} episodios fijos/track (tasa de exito)"
+    else:
+        modo_txt = f"hasta {args.laps} vueltas/track"
     print("=" * 56)
     print(f"Modelo:        {model_zip}")
     print(f"VecNormalize:  {vecnormalize_path}")
     print(f"Tracks eval:   {', '.join(tracks)}")
-    print(f"Vueltas/track: {args.laps}   Time limit: {int(args.max_episode_steps)} steps")
+    print(f"Modo:          {modo_txt}   Time limit: {int(args.max_episode_steps)} steps")
     print(f"Accion:        {'estocastica' if args.stochastic else 'determinista'}  "
           f"(n_stack={n_stack})")
 
@@ -415,6 +521,8 @@ def run_evaluation(args):
 
     if len(results) > 1:
         print_overall_summary(results, args)
+
+    save_eval_results(args, model_zip, n_stack, results)
 
 
 def main():
