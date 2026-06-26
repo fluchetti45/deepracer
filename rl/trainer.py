@@ -9,6 +9,7 @@ from datetime import datetime
 import numpy as np
 import torch
 from stable_baselines3 import PPO
+from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import (
     BaseCallback,
     CallbackList,
@@ -206,11 +207,17 @@ def parse_args():
     parser.add_argument(
         "--n-stack",
         type=int,
-        default=4,
+        default=1,
         help=(
-            "Cantidad de frames a apilar (VecFrameStack) para dar info temporal. "
-            "1 = sin stacking. >1 permite percibir movimiento (obstaculos dinamicos)."
+            "Cantidad de frames a apilar (VecFrameStack). En la rama vision_lstm el default "
+            "es 1: la RECURRENCIA (LSTM) aporta la memoria temporal, no el stacking."
         ),
+    )
+    parser.add_argument(
+        "--lstm-hidden-size",
+        type=int,
+        default=256,
+        help="Tamanio del estado oculto del LSTM (RecurrentPPO). Default 256.",
     )
     parser.add_argument("--n-epochs", type=int, default=5, help="n_epochs de PPO.")
     parser.add_argument(
@@ -570,10 +577,15 @@ def build_model(args, vec_env, run_paths):
         "max_grad_norm": 0.5,
     }
 
-    model = PPO(
-            "MultiInputPolicy",
+    # Rama vision_lstm: RecurrentPPO con LSTM en la policy (MultiInputLstmPolicy) en vez del
+    # PPO feedforward. La recurrencia aporta memoria temporal -> se entrena con --n-stack 1
+    # (la recurrencia REEMPLAZA al frame stacking). Comparacion del ablation: vision (1 frame)
+    # / vision apilada (4 frames) / vision LSTM (1 frame + recurrencia).
+    model = RecurrentPPO(
+            "MultiInputLstmPolicy",
             vec_env,
             verbose=1,
+            policy_kwargs={"lstm_hidden_size": args.lstm_hidden_size},
             **model_kwargs,
     )
     return model
@@ -636,6 +648,10 @@ def write_training_run_metadata(args, model, run_paths):
             "seed": int(args.seed),
             "host": args.host,
             "port": int(args.port),
+            # Marca de la rama vision_lstm: el eval debe cargar con RecurrentPPO y manejar
+            # el estado del LSTM en predict().
+            "recurrent": True,
+            "lstm_hidden_size": int(args.lstm_hidden_size),
         },
     }
 

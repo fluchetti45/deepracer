@@ -20,6 +20,7 @@ import time
 
 import numpy as np
 from stable_baselines3 import PPO
+from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.vec_env import (
     DummyVecEnv,
     VecFrameStack,
@@ -175,6 +176,16 @@ def read_n_stack(metadata_path, default):
         return default
 
 
+def read_recurrent(metadata_path):
+    """True si el modelo se entreno con LSTM (RecurrentPPO). Lo marca el trainer en metadata."""
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return bool(data["hyperparameters"].get("recurrent", False))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def build_eval_spawns(spawns_path, texture, spawn_index):
     """
     Escribe un spawns.json temporal con UN solo track (el elegido), de modo que el
@@ -253,10 +264,12 @@ def discover_eval_tracks(spawns_path):
     ]
 
 
-def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, texture):
+def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, texture,
+                       recurrent=False):
     """
     Evalua UN track: lanza su propio Webots forzando ese unico track, corre hasta
     juntar --laps vueltas (o agotar max_episodes) y devuelve un dict de resultados.
+    Si `recurrent`, maneja el estado del LSTM en predict() (RecurrentPPO).
     """
     eval_spawns_path, has_gates = build_eval_spawns(
         args.spawns, texture, args.spawn_index
@@ -288,6 +301,9 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
         wall_start = time.perf_counter()
         laps_done = 0
         fixed_n = args.episodes  # None => modo "hasta --laps vueltas"
+        # Estado del LSTM (solo recurrent): se resetea al inicio de cada episodio.
+        lstm_states = None
+        episode_starts = np.ones((1,), dtype=bool)
 
         while True:
             # Corte: N episodios fijos (modo tasa de exito) o hasta juntar --laps vueltas.
@@ -296,8 +312,15 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
                     break
             elif laps_done >= args.laps or episode >= max_episodes:
                 break
-            action, _ = model.predict(obs, deterministic=deterministic)
+            if recurrent:
+                action, lstm_states = model.predict(
+                    obs, state=lstm_states, episode_start=episode_starts,
+                    deterministic=deterministic,
+                )
+            else:
+                action, _ = model.predict(obs, deterministic=deterministic)
             obs, _rewards, dones, infos = vec_env.step(action)
+            episode_starts = dones  # al terminar un episodio, el LSTM arranca limpio
             step_in_episode += 1
             ep_reward += float(_rewards[0])  # reward real (VecNormalize no lo normaliza en eval)
 
@@ -475,6 +498,7 @@ def run_evaluation(args):
         raise SystemExit(f"No se encontro el modelo: {model_zip}")
     vecnormalize_path = os.path.abspath(args.vecnormalize or inferred_vecnorm)
     n_stack = args.n_stack if args.n_stack is not None else read_n_stack(metadata_path, 4)
+    recurrent = read_recurrent(metadata_path)
     max_episodes = args.max_episodes if args.max_episodes is not None else args.laps * 5 + 5
 
     # Lista de tracks a evaluar: el indicado, o TODOS los marcados "eval": true.
@@ -507,14 +531,15 @@ def run_evaluation(args):
     print(f"Tracks eval:   {', '.join(tracks)}")
     print(f"Modo:          {modo_txt}   Time limit: {int(args.max_episode_steps)} steps")
     print(f"Accion:        {'estocastica' if args.stochastic else 'determinista'}  "
-          f"(n_stack={n_stack})")
+          f"(n_stack={n_stack}{', LSTM' if recurrent else ''})")
 
-    model = PPO.load(model_zip, device=args.device)
+    model = (RecurrentPPO if recurrent else PPO).load(model_zip, device=args.device)
 
     results = []
     for texture in tracks:
         result = evaluate_one_track(
-            args, model, n_stack, vecnormalize_path, max_episodes, texture
+            args, model, n_stack, vecnormalize_path, max_episodes, texture,
+            recurrent=recurrent,
         )
         print_track_summary(result, args)
         results.append(result)

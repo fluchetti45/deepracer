@@ -53,8 +53,8 @@ def parse_args():
     # --- Train ---
     p.add_argument("--total-timesteps", type=int, default=100000)
     p.add_argument(
-        "--n-stack", type=int, default=4,
-        help="Frames apilados. 1 = vision/geometrica; 4 = vision apilada.",
+        "--n-stack", type=int, default=1,
+        help="Frames apilados. En vision_lstm: 1 (la recurrencia LSTM aporta la memoria).",
     )
     p.add_argument("--webots-world", default="worlds/track1.wbt")
     p.add_argument(
