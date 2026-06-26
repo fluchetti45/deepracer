@@ -109,10 +109,15 @@ memoria recurrente, imitation / model-based.
   No estacionario, necesita entrenamiento por población. Ambición lejana.
 
 ### 3.2 Memoria recurrente (LSTM) — solo ablation del paper
+- 🔧 **IMPLEMENTADO** en la rama `vision_lstm` (parte de `master`): `RecurrentPPO` +
+  `MultiInputLstmPolicy` (`trainer.py`), eval con manejo del estado del LSTM (`evaluate.py`),
+  `--n-stack 1` por defecto (la recurrencia reemplaza al stacking). **Falta entrenarla y ver
+  resultados.**
 - 💤 El horizonte temporal útil acá es **corto** (velocidad, closing speed) → el frame
   stacking ya lo captura. Se espera que el LSTM **no mejore** (y sea más finicky). Tratarlo
   como **ablation barato / resultado negativo válido** ("stacking alcanza"), NO como un paso
-  de performance. No priorizarlo.
+  de performance.
+  Correr: `python -m rl.run_experiment --seeds 0 1 2 3 4 --total-timesteps 200000 --episodes 20`
 
 ### 3.3 Arquitectura del extractor (CNN)
 - 💤 La capacidad **rara vez** es el cuello de botella en RL; agrandar NatureCNN suele empeorar.
@@ -139,6 +144,7 @@ memoria recurrente, imitation / model-based.
 | `geometrica` | Obs = features de percepción local, `MlpPolicy` | ✅ |
 | `ackerman` | Auto Ackermann 1/18, acción `[steering, speed]`, drive modular | ✅ |
 | `ackerman_obstacle` | Ackermann + object avoidance estático + banco de prueba | 🔧 (sin entrenar) |
+| `vision_lstm` | Visión + LSTM (RecurrentPPO), `--n-stack 1` | 🔧 (sin entrenar; ablation) |
 
 ---
 
