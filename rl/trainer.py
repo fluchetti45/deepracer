@@ -58,13 +58,18 @@ class RLMetricsCallback(BaseCallback):
         self._rollout_wrong_way = 0
         self._rollout_timeouts = 0
         self._continuous = defaultdict(list)
+        self._ep_progress = []  # progreso acumulado por env en el episodio en curso
 
     def _on_step(self):
         infos = self.locals.get("infos", [])
         dones = self.locals.get("dones", [])
 
+        # Acumulador de progreso por env (lazily; n_envs no se conoce de antemano).
+        if len(self._ep_progress) != len(infos):
+            self._ep_progress = [0.0] * len(infos)
+
         # Metricas continuas (todos los steps), desde el desglose de reward.
-        for info in infos:
+        for i, info in enumerate(infos):
             breakdown = info.get("reward_breakdown")
             if not isinstance(breakdown, dict):
                 continue
@@ -75,11 +80,18 @@ class RLMetricsCallback(BaseCallback):
             offset = breakdown.get("offset")
             if offset is not None:
                 self._continuous["abs_offset"].append(abs(float(offset)))
+            progress = breakdown.get("progress")
+            if progress is not None:
+                self._ep_progress[i] += float(progress)
 
         # Cierre de episodio: timeout (truncado) vs terminacion (off-track / carril perdido).
-        for done, info in zip(dones, infos):
+        for i, (done, info) in enumerate(zip(dones, infos)):
             if not done:
                 continue
+            # Progreso NETO recorrido en el episodio (arc-length sobre el circuito) -> curva
+            # de aprendizaje continua y robusta cuando las vueltas completas son raras.
+            self._continuous["ep_progress"].append(self._ep_progress[i])
+            self._ep_progress[i] = 0.0
             self.total_episodes += 1
             self._rollout_episodes += 1
             if info.get("TimeLimit.truncated", False):
@@ -200,8 +212,11 @@ def parse_args():
     )
     parser.add_argument(
         "--norm-reward",
-        action="store_true",
-        help=(""
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Normalizar el reward (VecNormalize). Default True: estabiliza el critico con "
+            "retornos grandes (~500/episodio). Apagar con --no-norm-reward."
         ),
     )
     parser.add_argument(
