@@ -54,9 +54,8 @@ Robot {
       channel 1
     }
   ]
-  controller "supervisor_controller"
+  controller "obstacle_monitor"
   supervisor TRUE
-  window "supervisor_window"
 }
 # ----------------------------------------------------------------------------
 # Auto estilo DeepRacer (1/18): traccion trasera (rear-wheel drive) + direccion
@@ -306,7 +305,7 @@ DEF EPUCK Robot {
       0 0 0.035
     ]
   }
-  controller "agent_controller"
+  controller "keyboard_drive"
 }
 # ---------------------------------------------------------------------------
 # Pool de OBSTACULOS (cajas estilo DeepRacer). Solidos ESTATICOS (sin physics)
@@ -317,7 +316,7 @@ DEF EPUCK Robot {
 # para que la CNN del agente las distinga. Tamanio 0.1 m.
 # ---------------------------------------------------------------------------
 DEF OBSTACLE_0 Solid {
-  translation 100 100 -5
+  translation 0.8 0 0.05
   children [
     Shape {
       appearance PBRAppearance { baseColor 0.92 0.35 0.05 roughness 1 metalness 0 }
@@ -328,7 +327,7 @@ DEF OBSTACLE_0 Solid {
   boundingObject USE OBSTACLE_BOX
 }
 DEF OBSTACLE_1 Solid {
-  translation 102 100 -5
+  translation 1.5 0.3 0.05
   children [
     Shape {
       appearance PBRAppearance { baseColor 0.92 0.35 0.05 roughness 1 metalness 0 }
@@ -339,7 +338,7 @@ DEF OBSTACLE_1 Solid {
   boundingObject USE OBSTACLE_BOX
 }
 DEF OBSTACLE_2 Solid {
-  translation 104 100 -5
+  translation 1.5 -0.3 0.05
   children [
     Shape {
       appearance PBRAppearance { baseColor 0.92 0.35 0.05 roughness 1 metalness 0 }

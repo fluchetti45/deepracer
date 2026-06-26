@@ -56,6 +56,7 @@ class RLMetricsCallback(BaseCallback):
         self.total_offtrack = 0
         self.total_line_lost = 0
         self.total_wrong_way = 0
+        self.total_obstacle_hit = 0
         self.total_timeouts = 0
         # Acumuladores por rollout (se resetean en cada _on_rollout_end).
         self._rollout_episodes = 0
@@ -63,6 +64,7 @@ class RLMetricsCallback(BaseCallback):
         self._rollout_offtrack = 0
         self._rollout_line_lost = 0
         self._rollout_wrong_way = 0
+        self._rollout_obstacle_hit = 0
         self._rollout_timeouts = 0
         self._continuous = defaultdict(list)
 
@@ -104,6 +106,9 @@ class RLMetricsCallback(BaseCallback):
             elif reason == "line_lost":
                 self.total_line_lost += 1
                 self._rollout_line_lost += 1
+            elif reason == "obstacle_hit":
+                self.total_obstacle_hit += 1
+                self._rollout_obstacle_hit += 1
             else:  # offtrack_grass (u otra terminacion)
                 self.total_offtrack += 1
                 self._rollout_offtrack += 1
@@ -117,6 +122,7 @@ class RLMetricsCallback(BaseCallback):
         self.logger.record("custom/offtrack_total", self.total_offtrack)
         self.logger.record("custom/line_lost_total", self.total_line_lost)
         self.logger.record("custom/wrong_way_total", self.total_wrong_way)
+        self.logger.record("custom/obstacle_hit_total", self.total_obstacle_hit)
         self.logger.record("custom/timeouts_total", self.total_timeouts)
 
         # Tasas por rollout.
@@ -126,6 +132,7 @@ class RLMetricsCallback(BaseCallback):
             self.logger.record("custom/offtrack_rate", self._rollout_offtrack / n)
             self.logger.record("custom/line_lost_rate", self._rollout_line_lost / n)
             self.logger.record("custom/wrong_way_rate", self._rollout_wrong_way / n)
+            self.logger.record("custom/obstacle_hit_rate", self._rollout_obstacle_hit / n)
             self.logger.record("custom/timeout_rate", self._rollout_timeouts / n)
             self.logger.record("custom/episodes_this_rollout", n)
 
@@ -140,6 +147,7 @@ class RLMetricsCallback(BaseCallback):
         self._rollout_offtrack = 0
         self._rollout_line_lost = 0
         self._rollout_wrong_way = 0
+        self._rollout_obstacle_hit = 0
         self._rollout_timeouts = 0
         self._continuous.clear()
 
@@ -154,6 +162,7 @@ class RLMetricsCallback(BaseCallback):
         print(f"  off-track (pasto) : {self.total_offtrack:5d}  ({pct(self.total_offtrack)})")
         print(f"  carril perdido    : {self.total_line_lost:5d}  ({pct(self.total_line_lost)})")
         print(f"  contramano        : {self.total_wrong_way:5d}  ({pct(self.total_wrong_way)})")
+        print(f"  choque obstaculo  : {self.total_obstacle_hit:5d}  ({pct(self.total_obstacle_hit)})")
         print(f"  timeout           : {self.total_timeouts:5d}  ({pct(self.total_timeouts)})")
         print("=" * 52)
 

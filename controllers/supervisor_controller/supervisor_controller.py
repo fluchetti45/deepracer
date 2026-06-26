@@ -16,6 +16,7 @@ from helpers.policy_runner import PolicyRunner
 from helpers.image_obs import blank_image_payload
 from helpers.lane_vision import decode_rgb_hwc, detect_lane
 from helpers.track_progress import build_loop, project_s, signed_delta
+from helpers.obstacle_geom import car_obstacle_clearance
 
 
 # Domain randomization de la pose del robot al inicio de cada episodio: jitter de
@@ -125,6 +126,36 @@ START_LINE_HALF_WIDTH = read_env_value("START_LINE_HALF_WIDTH", 0.5)
 # la deteccion (evita contar la largada inicial como vuelta).
 START_LINE_ARM_DISTANCE = read_env_value("START_LINE_ARM_DISTANCE", 0.5)
 
+# ----------------------------------------------------------------------------
+# Obstaculos (cajas estilo DeepRacer). El supervisor coloca OBSTACLE_COUNT cajas
+# sobre la pista al inicio del episodio (sobre los gates, con jitter lateral) y
+# termina el episodio con pena fuerte si el robot las choca (distancia geometrica
+# centro-a-centro). El agente las percibe por la camara (no entran en la obs como
+# dato; las "ve" como pixeles) -> aprende a esquivar por la pena.
+# ----------------------------------------------------------------------------
+# Activar/desactivar el feature completo.
+OBSTACLES_ENABLED = bool(read_env_value("OBSTACLES_ENABLED", 1, int))
+# Cuantas cajas colocar por episodio (acotado por el pool DEF OBSTACLE_* del .wbt).
+OBSTACLE_COUNT = read_env_value("OBSTACLE_COUNT", 3, int)
+# Reward terminal al chocar una caja (mas fuerte que salirse de pista).
+OBSTACLE_PENALTY = read_env_value("OBSTACLE_PENALTY", -2.0)
+# El auto se modela como un RECTANGULO ORIENTADO (no un punto): el choque se declara si la
+# caja queda a <= OBSTACLE_HIT_DIST del BORDE de ese rectangulo (= radio efectivo de la
+# caja). Asi detecta golpes con esquina/rueda descentrada sin disparar al pasar al costado.
+OBSTACLE_HIT_DIST = read_env_value("OBSTACLE_HIT_DIST", 0.07)
+# Footprint del auto (media-longitud y medio-ancho, m) INCLUYENDO las ruedas, para el
+# rectangulo de colision. Carroceria 0.20x0.10; ruedas hasta ~0.11 de largo y ~0.075 de ancho.
+CAR_HALF_LENGTH = read_env_value("CAR_HALF_LENGTH", 0.11)
+CAR_HALF_WIDTH = read_env_value("CAR_HALF_WIDTH", 0.075)
+# Alto de la caja (m): la mitad es la z de apoyo sobre el piso.
+OBSTACLE_BOX_SIZE = read_env_value("OBSTACLE_BOX_SIZE", 0.1)
+# Jitter lateral (m, +/-) perpendicular a la pista al colocar la caja sobre un gate.
+OBSTACLE_LATERAL_JITTER = read_env_value("OBSTACLE_LATERAL_JITTER", 0.08)
+# Distancia minima (m) del spawn a la que puede aparecer una caja (no arrancar pegado).
+OBSTACLE_MIN_SPAWN_DIST = read_env_value("OBSTACLE_MIN_SPAWN_DIST", 0.6)
+# Z (m) a la que se parkean las cajas no usadas (lejos en XY ya alcanza; esto las hunde).
+OBSTACLE_PARK_Z = read_env_value("OBSTACLE_PARK_Z", -5.0)
+
 # Tipo de conduccion del robot del world: "ackermann" (auto) o "differential" (e-puck).
 # Filtra el pool de tracks de spawns.json: solo se usan los del mismo "drive". Lo setea
 # trainer/evaluate al lanzar Webots; por defecto sale del .env.
@@ -168,6 +199,19 @@ class SupervisorController:
         self.epuck_rotation_field = self.epuck_robot.getField("rotation")
         self.epuck_robot_initial_translation = list(self.epuck_translation_field.getSFVec3f())
         self.epuck_robot_initial_rotation = list(self.epuck_rotation_field.getSFRotation())
+        # Pool de obstaculos (DEF OBSTACLE_0, OBSTACLE_1, ... en el .wbt). El supervisor
+        # los reposiciona por episodio; los no usados quedan parkeados lejos. Vacio si el
+        # world no define cajas (el feature de obstaculos queda inactivo, sin romper nada).
+        self.obstacle_fields = []
+        obstacle_index = 0
+        while True:
+            node = self.supervisor.getFromDef(f"OBSTACLE_{obstacle_index}")
+            if node is None:
+                break
+            self.obstacle_fields.append(node.getField("translation"))
+            obstacle_index += 1
+        # XY de las cajas ACTIVAS este episodio (para el chequeo de choque geometrico).
+        self.obstacle_positions = []
         self.last_action_label = "idle"
         self.last_robot_message = None
         self.last_camera_frame = None
@@ -808,6 +852,69 @@ class SupervisorController:
         log_supervisor(f"[Supervisor] episodio {self.episode_id + 1} en track '{track['texture']}'")
         return list(spawn["translation"]), list(spawn["rotation"])
 
+    def _place_obstacles(self):
+        """
+        Coloca OBSTACLE_COUNT cajas sobre la pista del episodio (sobre gates lejos del
+        spawn, con jitter lateral perpendicular a la pista) y parkea el resto lejos.
+        Guarda en self.obstacle_positions las XY de las cajas activas (chequeo de choque).
+        No hace nada si no hay pool de cajas, el feature esta off, o el track no tiene gates.
+        """
+        self.obstacle_positions = []
+        if not self.obstacle_fields:
+            return
+        # Parkear TODAS lejos en XY (la distancia de choque es planar => XY lejano basta).
+        for j, field in enumerate(self.obstacle_fields):
+            field.setSFVec3f([100.0 + 2.0 * j, 100.0, OBSTACLE_PARK_Z])
+        if not OBSTACLES_ENABLED or self.current_loop is None:
+            return
+
+        verts = self.current_loop[0][:-1]  # (N, 2): vertices del loop sin repetir el cierre
+        n = len(verts)
+        if n == 0:
+            return
+
+        # Candidatos: gates lejos del spawn (no arrancar pegado a una caja).
+        spawn_xy = None
+        if self.current_spawn and self.current_spawn[0] is not None:
+            spawn_xy = np.asarray(self.current_spawn[0][:2], dtype=float)
+        idxs = list(range(n))
+        if spawn_xy is not None:
+            far = [i for i in idxs
+                   if float(np.hypot(*(verts[i] - spawn_xy))) >= OBSTACLE_MIN_SPAWN_DIST]
+            idxs = far or idxs
+        self.reset_rng.shuffle(idxs)
+
+        k = min(OBSTACLE_COUNT, len(self.obstacle_fields), len(idxs))
+        half_h = OBSTACLE_BOX_SIZE / 2.0
+        for slot in range(k):
+            i = idxs[slot]
+            base = verts[i]
+            # Perpendicular a la tangente local (gate siguiente - gate anterior).
+            tang = verts[(i + 1) % n] - verts[(i - 1) % n]
+            norm = float(np.hypot(tang[0], tang[1])) or 1.0
+            perp = np.array([-tang[1], tang[0]]) / norm
+            jitter = float(self.reset_rng.uniform(-OBSTACLE_LATERAL_JITTER, OBSTACLE_LATERAL_JITTER))
+            xy = base + perp * jitter
+            self.obstacle_fields[slot].setSFVec3f([float(xy[0]), float(xy[1]), half_h])
+            self.obstacle_positions.append((float(xy[0]), float(xy[1])))
+
+    def _check_obstacle_hit(self):
+        """
+        True si alguna caja activa queda a <= OBSTACLE_HIT_DIST del rectangulo orientado del
+        auto (modelo OBB, ver helpers/obstacle_geom). Capta golpes con esquina/rueda.
+        """
+        if not self.obstacle_positions:
+            return False
+        pos = self.epuck_robot.getPosition()
+        rot = self.epuck_robot.getOrientation()
+        for ox, oy in self.obstacle_positions:
+            clearance = car_obstacle_clearance(
+                pos, rot, (ox, oy), CAR_HALF_LENGTH, CAR_HALF_WIDTH
+            )
+            if clearance <= OBSTACLE_HIT_DIST:
+                return True
+        return False
+
     def _init_progress(self):
         """Resetea el progreso del episodio; fija el s inicial desde la pose del spawn."""
         self.cumulative_progress = 0.0
@@ -905,6 +1012,9 @@ class SupervisorController:
         self._reset_robot_pose(translation=translation, rotation=rotation)
         # Jitter de pose SOBRE el spawn elegido (si DR esta activo).
         self._apply_domain_randomization()
+        # Colocar las cajas de obstaculos sobre la pista ANTES del settle (asi la imagen
+        # post-reset ya las muestra y el agente las percibe desde el primer frame).
+        self._place_obstacles()
         self._advance_simulation(RESET_SETTLE_STEPS)
         self._refresh_robot_observation()
         self.episode_id += 1
@@ -1052,6 +1162,11 @@ class SupervisorController:
             self.offtrack_steps = 0
 
         terminated = breakdown["terminated"]
+        # Choque con caja (geometrico, inmediato, sin debounce) => terminal con pena fuerte.
+        if not terminated and self._check_obstacle_hit():
+            terminated = True
+            breakdown["term_reason"] = "obstacle_hit"
+            breakdown["reward"] = round(float(OBSTACLE_PENALTY), 4)
         if not terminated and self.offtrack_steps >= OFFTRACK_MAX_STEPS:
             terminated = True
             breakdown["term_reason"] = "offtrack_grass"
