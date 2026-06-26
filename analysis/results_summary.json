@@ -1,0 +1,254 @@
+{
+  "variants": {
+    "geometrica": {
+      "label": "Geometrica",
+      "n_seeds": 5,
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "lap_rate": {
+        "mean": 0.6,
+        "std": 0.2345207879911715
+      },
+      "reward": {
+        "mean": 565.3861609730125,
+        "std": 107.45192958046395
+      },
+      "offtrack_rate": {
+        "mean": 0.27999999999999997,
+        "std": 0.17888543819998318
+      },
+      "lap_time_s": {
+        "mean": 166.75177142857143,
+        "std": 18.552241488866628
+      },
+      "per_track_lap_rate": {
+        "track4.png": {
+          "mean": 0.94,
+          "std": 0.1341640786499874
+        },
+        "track5.png": {
+          "mean": 0.26,
+          "std": 0.4219004621945797
+        }
+      },
+      "per_seed": [
+        {
+          "seed": 0,
+          "lap_rate": 0.5,
+          "reward": 407.39465000517663,
+          "offtrack_rate": 0.5,
+          "lap_time": 172.752
+        },
+        {
+          "seed": 1,
+          "lap_rate": 0.6,
+          "reward": 546.0502499017864,
+          "offtrack_rate": 0.3,
+          "lap_time": 141.048
+        },
+        {
+          "seed": 2,
+          "lap_rate": 1.0,
+          "reward": 589.3998148784042,
+          "offtrack_rate": 0.0,
+          "lap_time": 178.44799999999998
+        },
+        {
+          "seed": 3,
+          "lap_rate": 0.5,
+          "reward": 576.7771949961782,
+          "offtrack_rate": 0.3,
+          "lap_time": 154.768
+        },
+        {
+          "seed": 4,
+          "lap_rate": 0.4,
+          "reward": 707.3088950835169,
+          "offtrack_rate": 0.3,
+          "lap_time": 186.74285714285713
+        }
+      ]
+    },
+    "vision": {
+      "label": "Vision (1 frame)",
+      "n_seeds": 5,
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "lap_rate": {
+        "mean": 0.04,
+        "std": 0.08944271909999159
+      },
+      "reward": {
+        "mean": 195.7861430247128,
+        "std": 66.98715533456549
+      },
+      "offtrack_rate": {
+        "mean": 0.96,
+        "std": 0.08944271909999157
+      },
+      "lap_time_s": {
+        "mean": 238.04,
+        "std": 0.0
+      },
+      "per_track_lap_rate": {
+        "track4.png": {
+          "mean": 0.0,
+          "std": 0.0
+        },
+        "track5.png": {
+          "mean": 0.08,
+          "std": 0.17888543819998318
+        }
+      },
+      "per_seed": [
+        {
+          "seed": 0,
+          "lap_rate": 0.0,
+          "reward": 189.6289800055325,
+          "offtrack_rate": 1.0,
+          "lap_time": null
+        },
+        {
+          "seed": 1,
+          "lap_rate": 0.0,
+          "reward": 195.20259003676472,
+          "offtrack_rate": 1.0,
+          "lap_time": null
+        },
+        {
+          "seed": 2,
+          "lap_rate": 0.0,
+          "reward": 228.50662999153138,
+          "offtrack_rate": 1.0,
+          "lap_time": null
+        },
+        {
+          "seed": 3,
+          "lap_rate": 0.2,
+          "reward": 273.6333650831133,
+          "offtrack_rate": 0.8,
+          "lap_time": 238.04
+        },
+        {
+          "seed": 4,
+          "lap_rate": 0.0,
+          "reward": 91.95915000662208,
+          "offtrack_rate": 1.0,
+          "lap_time": null
+        }
+      ]
+    },
+    "vision_stacked": {
+      "label": "Vision apilada (4)",
+      "n_seeds": 5,
+      "seeds": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "lap_rate": {
+        "mean": 0.0,
+        "std": 0.0
+      },
+      "reward": {
+        "mean": 42.77003399074078,
+        "std": 19.110119825549194
+      },
+      "offtrack_rate": {
+        "mean": 1.0,
+        "std": 0.0
+      },
+      "lap_time_s": {
+        "mean": null,
+        "std": null
+      },
+      "per_track_lap_rate": {
+        "track4.png": {
+          "mean": 0.0,
+          "std": 0.0
+        },
+        "track5.png": {
+          "mean": 0.0,
+          "std": 0.0
+        }
+      },
+      "per_seed": [
+        {
+          "seed": 0,
+          "lap_rate": 0.0,
+          "reward": 30.361684991419317,
+          "offtrack_rate": 1.0,
+          "lap_time": null
+        },
+        {
+          "seed": 1,
+          "lap_rate": 0.0,
+          "reward": 29.57104499861598,
+          "offtrack_rate": 1.0,
+          "lap_time": null
+        },
+        {
+          "seed": 2,
+          "lap_rate": 0.0,
+          "reward": 58.325815020129085,
+          "offtrack_rate": 1.0,
+          "lap_time": null
+        },
+        {
+          "seed": 3,
+          "lap_rate": 0.0,
+          "reward": 27.300604964047672,
+          "offtrack_rate": 1.0,
+          "lap_time": null
+        },
+        {
+          "seed": 4,
+          "lap_rate": 0.0,
+          "reward": 68.29101997949184,
+          "offtrack_rate": 1.0,
+          "lap_time": null
+        }
+      ]
+    }
+  },
+  "tracks": [
+    "track4.png",
+    "track5.png"
+  ],
+  "n_runs": 15,
+  "significance": [
+    {
+      "a": "geometrica",
+      "b": "vision",
+      "metric": "lap_rate",
+      "U": 25.0,
+      "p_two_sided": 0.007936507936507936
+    },
+    {
+      "a": "geometrica",
+      "b": "vision_stacked",
+      "metric": "lap_rate",
+      "U": 25.0,
+      "p_two_sided": 0.007936507936507936
+    },
+    {
+      "a": "vision",
+      "b": "vision_stacked",
+      "metric": "lap_rate",
+      "U": 15.0,
+      "p_two_sided": 1.0
+    }
+  ]
+}

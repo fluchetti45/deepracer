@@ -1,0 +1,20 @@
+{
+  "geometrica": {
+    "label": "Geometrica",
+    "ts_to_reward_25": 33613.445378151264,
+    "ts_to_reward_50": 50420.1680672269,
+    "ts_to_reward_75": 71428.57142857143
+  },
+  "vision": {
+    "label": "Vision (1 frame)",
+    "ts_to_reward_25": 96638.65546218488,
+    "ts_to_reward_50": 352941.17647058825,
+    "ts_to_reward_75": 491596.63865546224
+  },
+  "vision_stacked": {
+    "label": "Vision apilada (4)",
+    "ts_to_reward_25": 273109.243697479,
+    "ts_to_reward_50": null,
+    "ts_to_reward_75": null
+  }
+}

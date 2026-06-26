@@ -1,8 +1,8 @@
 # Conducción autónoma estilo DeepRacer en Webots: el rol de la representación de la observación
 
 > Informe técnico / paper en progreso.
-> Las secciones de **Resultados** están como _placeholder_: se completan tras correr
-> varias seeds por variante y agregar estadísticas.
+> **Resultados de evaluación cargados** (§6) a partir de 15 corridas: 5 seeds × 3 variantes,
+> 500k timesteps. Pendiente: curvas de TensorBoard (§6.1/6.3) y la variante LSTM.
 
 ---
 
@@ -266,6 +266,8 @@ python -m rl.trainer --n-stack 1 --webots-world worlds/track1.wbt --seed <S>
 - **N seeds** por variante (sugerido N ≥ 5): `--seed 0..N-1`.
 - Mismo `--total-timesteps` para las tres.
 - Se reportan **media ± desvío** (o IQM) sobre las seeds.
+- **Este informe**: 5 seeds (0–4), **500k timesteps**, `n_envs=4`. Agregación con
+  `analysis/aggregate_eval.py`.
 
 ### 5.3 Evaluación
 
@@ -282,8 +284,8 @@ La evaluación **guarda las métricas** en `<run_dir>/eval_results_<timestamp>.j
 
 **Convención**: cada métrica se mide en entrenamiento **[TRAIN]** (sobre las pistas
 vistas, durante los rollouts) y/o en evaluación **[EVAL]** (sobre pistas held-out, con
-el modelo final). Miden cosas distintas: TRAIN = *cuán rápido y bien aprende*; EVAL =
-*cuán bien generaliza*.
+el modelo final). Miden cosas distintas: TRAIN = _cuán rápido y bien aprende_; EVAL =
+_cuán bien generaliza_.
 
 **Dónde se guardan**:
 
@@ -292,71 +294,132 @@ el modelo final). Miden cosas distintas: TRAIN = *cuán rápido y bien aprende*;
 - **[EVAL]** → **JSON** en `<run_dir>/eval_results_<timestamp>.json`, escrito por
   `rl/evaluate.py`.
 
-| Métrica                       | Definición                                             | Fuente                                                          |
-| ----------------------------- | ------------------------------------------------------ | -------------------------------------------------------------- |
-| **Tasa de vuelta** (lap rate) | % de episodios que completan una vuelta                | **[EVAL]** `lap_rate` · **[TRAIN]** `custom/lap_rate`          |
-| **Tiempo a vuelta**           | pasos/segundos hasta completar la vuelta (solo éxitos) | **[EVAL]** `lap_steps_mean`, `lap_time_s_mean`                 |
-| **Tasa off-track**            | % de episodios terminados por salir a pasto            | **[EVAL]** `failure_rates` · **[TRAIN]** `custom/offtrack_rate` |
+| Métrica                       | Definición                                             | Fuente                                                           |
+| ----------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------- |
+| **Tasa de vuelta** (lap rate) | % de episodios que completan una vuelta                | **[EVAL]** `lap_rate` · **[TRAIN]** `custom/lap_rate`            |
+| **Tiempo a vuelta**           | pasos/segundos hasta completar la vuelta (solo éxitos) | **[EVAL]** `lap_steps_mean`, `lap_time_s_mean`                   |
+| **Tasa off-track**            | % de episodios terminados por salir a pasto            | **[EVAL]** `failure_rates` · **[TRAIN]** `custom/offtrack_rate`  |
 | **Tasa contramano**           | % terminados por contramano                            | **[EVAL]** `failure_rates` · **[TRAIN]** `custom/wrong_way_rate` |
 | **Tasa carril perdido**       | % terminados por perder la pista                       | **[EVAL]** `failure_rates` · **[TRAIN]** `custom/line_lost_rate` |
-| **Reward medio / episodio**   | retorno promedio                                       | **[EVAL]** `reward_ep_mean` · **[TRAIN]** `rollout/ep_rew_mean` |
-| **Eficiencia de muestras**    | timesteps hasta alcanzar X% de lap rate                | **[TRAIN]** (deriva de la curva `custom/lap_rate`)             |
+| **Reward medio / episodio**   | retorno promedio                                       | **[EVAL]** `reward_ep_mean` · **[TRAIN]** `rollout/ep_rew_mean`  |
+| **Eficiencia de muestras**    | timesteps hasta alcanzar X% de lap rate                | **[TRAIN]** (deriva de la curva `custom/lap_rate`)               |
 
-> **Nota metodológica**: el loop de eval corta al juntar `--laps` vueltas, por lo que
-> `lap_rate` queda calculado sobre los episodios efectivamente corridos (sesgado si el
-> modelo es bueno). Para una **tasa de éxito limpia**, correr con `--laps` alto o agregar
-> un modo de **N episodios fijos** (pendiente).
+> **Nota metodológica**: para una tasa de éxito **sin sesgo** se usa el modo de **N
+> episodios fijos** (`--episodes`): corre N intentos pase lo que pase y reporta
+> `lap_rate = vueltas/N`. Los resultados de §6 usan **10 episodios por track**.
 
 ---
 
 ## 6. Resultados
 
-> **PLACEHOLDER — pendiente de correr N seeds por variante y agregar estadísticas.**
+> **Datos**: 5 seeds × 3 variantes (15 corridas), **500k timesteps** c/u, `n_envs=4`.
+> Evaluación sobre pistas **held-out** (`track4`, `track5`), **10 episodios/track** (modo
+> tasa de éxito). Agregación: `analysis/aggregate_eval.py` → `analysis/results_summary.*`.
 
 ### 6.1 Curvas de aprendizaje — **[TRAIN]**
 
-> **PLACEHOLDER**: lap rate y reward vs. timesteps, media ± desvío sobre seeds, una
-> curva por variante. (Fuente: TensorBoard `custom/lap_rate`, `custom/offtrack_rate`,
-> etc., sobre las pistas de entrenamiento.)
+Extraídas de TensorBoard con `analysis/parse_tensorboard.py` (media ± desvío sobre las 5
+seeds).
 
-```
-[figura: lap_rate vs timesteps — geométrica / visión / visión apilada]
-[figura: reward medio vs timesteps]
-```
+![Reward (train) vs timesteps](analysis/fig_reward.png)
+
+> **Importante**: el `lap_rate` de **train** NO es una métrica útil acá — una vuelta toma
+> ~1080 steps y el episodio de training corta a 1000 (`MAX_EPISODE_STEPS`), así que **nunca
+> entra una vuelta completa** y el lap_rate train queda truncado a ~0 para todas las
+> variantes (geom 0.16 / visión 0.08 / apilada 0.0 de máximo). La curva de aprendizaje
+> informativa es el **reward**.
+
+Valores finales de train (media sobre seeds):
+
+| Variante           | Reward final  | Off-track (train) |
+| ------------------ | ------------- | ----------------- |
+| Geométrica         | 105 (máx 137) | 0.61              |
+| Visión (1 frame)   | 75            | 0.79              |
+| Visión apilada (4) | 42            | 0.93              |
+
+El orden es el **mismo** que en held-out: **geom > visión > apilada** también sobre las
+pistas de entrenamiento.
 
 ### 6.2 Desempeño final (pistas held-out) — **[EVAL]**
 
-> **PLACEHOLDER**: completar con media ± desvío sobre N seeds. (Fuente:
-> `eval_results_*.json` de cada corrida.)
+Media ± desvío sobre las 5 seeds (pooled sobre los dos tracks held-out):
 
-| Variante           | Lap rate (%) | Tiempo a vuelta | Off-track (%) | Contramano (%) | Reward/ep |
-| ------------------ | ------------ | --------------- | ------------- | -------------- | --------- |
-| Geométrica         | —            | —               | —             | —              | —         |
-| Visión (1 frame)   | —            | —               | —             | —              | —         |
-| Visión apilada (4) | —            | —               | —             | —              | —         |
+| Variante               | Lap rate (%)    | Reward/ep        | Off-track (%)   | Tiempo vuelta (s) |
+| ---------------------- | --------------- | ---------------- | --------------- | ----------------- |
+| **Geométrica**         | **60.0 ± 23.5** | **565.4 ± 107.5**| **28.0 ± 17.9** | **166.8 ± 18.6**  |
+| Visión (1 frame)       | 4.0 ± 8.9       | 195.8 ± 67.0     | 96.0 ± 8.9      | 238.0 ± 0.0       |
+| Visión apilada (4)     | 0.0 ± 0.0       | 42.8 ± 19.1      | 100.0 ± 0.0     | —                 |
+
+Lap rate desglosado por pista (revela que la visión falla **incluso** en `track4`):
+
+| Variante           | track4          | track5          |
+| ------------------ | --------------- | --------------- |
+| Geométrica         | 94.0 ± 13.4     | 26.0 ± 42.2     |
+| Visión (1 frame)   | 0.0 ± 0.0       | 8.0 ± 17.9      |
+| Visión apilada (4) | 0.0 ± 0.0       | 0.0 ± 0.0       |
+
+Lap rate **por seed** (muestra la separación total): geométrica `[0.5, 0.6, 1.0, 0.5, 0.4]`,
+visión `[0.0, 0.0, 0.0, 0.2, 0.0]`, visión apilada `[0, 0, 0, 0, 0]`.
 
 ### 6.3 Eficiencia de muestras — **[TRAIN]**
 
-> **PLACEHOLDER**: timesteps hasta 50% / 80% de lap rate por variante. (Deriva de las
-> curvas de §6.1.)
+Timesteps hasta que el **reward medio** cruza cada umbral (el lap_rate de train no sirve
+como métrica, ver §6.1):
+
+| Variante           | reward ≥ 25 | reward ≥ 50 | reward ≥ 75 |
+| ------------------ | ----------- | ----------- | ----------- |
+| Geométrica         | 34k         | 50k         | 71k         |
+| Visión (1 frame)   | 97k         | 353k        | 492k        |
+| Visión apilada (4) | 273k        | nunca       | nunca       |
+
+La geométrica es **~7× más eficiente** (reward 75 en 71k vs 492k de visión); la visión
+apilada **nunca** alcanza reward 50 en 500k steps.
 
 ### 6.4 Tests de significancia — **[EVAL]**
 
-> **PLACEHOLDER**: comparación entre variantes (p. ej. Mann-Whitney U sobre las
-> métricas de eval por seed), para sostener las afirmaciones del paper.
+Mann-Whitney **exacto** (permutación) sobre el lap rate por seed:
+
+| Comparación                          | U    | p (two-sided) |
+| ------------------------------------ | ---- | ------------- |
+| Geométrica vs Visión (1 frame)       | 25.0 | **0.0079**    |
+| Geométrica vs Visión apilada (4)     | 25.0 | **0.0079**    |
+| Visión (1 frame) vs Visión apilada (4) | 15.0 | 1.0000        |
+
+`U=25` es el **máximo** posible (n=5×5): **toda** seed geométrica supera a **toda** seed de
+visión → separación total, y `p=0.0079` es el mínimo alcanzable con n=5+5. Las dos
+variantes de visión son **estadísticamente indistinguibles** (p=1.0): ambas fallan.
 
 ---
 
 ## 7. Discusión
 
-> **PLACEHOLDER** — depende de los resultados. Preguntas a responder:
->
-> - ¿Las features a mano (geométrica) **igualan o superan** a la CNN cruda? Si sí,
->   sugiere que la información relevante de la imagen es de baja dimensión y el diseño
->   de features ahorra muestras.
-> - ¿El **apilado de frames** (información temporal) mejora el control en curvas
->   cerradas o reduce el contramano?
-> - ¿Qué variante es más **robusta** al cambio de pista (gap train→held-out)?
+Los resultados son **fuertes y, en parte, contra-intuitivos**:
+
+1. **Las features a mano (geométrica) dominan ampliamente.** 60% de lap rate en pistas
+   nunca vistas, contra ≤4% de las variantes de visión, con **separación total** entre
+   seeds (p=0.008). La razón es de **generalización**: las features geométricas son
+   **invariantes a la apariencia** (offsets de la calzada relativos al agente), así que
+   transfieren a pistas nuevas. La CNN, en cambio, aprende patrones de píxeles
+   **específicos del training** y no transfiere — de hecho la visión falla **incluso en
+   `track4`** (0%), lo que apunta a **overfitting de apariencia**, no a falta de capacidad.
+
+2. **El frame stacking NO ayudó; si algo, empeoró.** Visión apilada (0%, reward 43) quedó
+   por debajo de visión de 1 frame (4%, reward 196), aunque la diferencia entre ambas **no
+   es significativa** (p=1.0): las dos esencialmente no generalizan. El stacking agrega 4×
+   canales y más parámetros sin aportar la señal que falta: en esta tarea la dificultad es
+   de **generalización de apariencia**, no de información temporal de corto plazo. Refuerza
+   —desde otro ángulo— que la **memoria temporal no es el cuello de botella** acá.
+
+3. **Incluso la geométrica sufre en `track5`** (26% vs 94% en `track4`): hay pistas
+   intrínsecamente más difíciles (curvas cerradas / auto-aproximación) donde ninguna
+   representación llega lejos. La alta varianza (±42 en track5) viene de eso.
+
+**No es solo overfitting** (con las curvas de train, §6.1/6.3): la geométrica también es
+mejor *sobre las pistas de training* — mayor reward final (105 vs 75 vs 42), menor off-track
+(0.61 vs 0.79 vs 0.93) y **~7× más eficiente en muestras**. O sea, la visión es a la vez
+**peor aprendiz** y **peor generalizador**: no es que aprenda bien el training y solo falle
+al transferir. El colapso a 0–4% en held-out (con reward de train no nulo) indica que,
+además, **lo poco que aprende no transfiere** (apariencia específica del training).
 
 ---
 
@@ -386,12 +449,21 @@ el modelo final). Miden cosas distintas: TRAIN = *cuán rápido y bien aprende*;
 
 ## 10. Conclusión
 
-> **PLACEHOLDER** — a redactar con los resultados.
->
-> Tesis a defender: _a igualdad de reward, robot y acción, la representación de la
-> observación es un factor de primer orden en la eficiencia y robustez del agente;
-> el diseño de features y la información temporal compensan parte de la dificultad de
-> aprender de píxeles crudos._
+A igualdad de reward, robot, acción e hiperparámetros, **la representación de la
+observación es un factor de primer orden**, y en esta tarea el orden es nítido:
+
+> **features geométricas invariantes a la apariencia ≫ píxeles crudos ≈ píxeles apilados.**
+
+El diseño de features a mano (offsets de calzada relativos al agente) **generaliza** a
+pistas nuevas donde la CNN sobre píxeles crudos **no transfiere** (overfitting de
+apariencia), y el **apilado de frames no la rescata**. La hipótesis inicial —que features
+y temporalidad "compensan" la dificultad de los píxeles— **se cumple para las features** y
+**se rechaza para el stacking**: en esta tarea la temporalidad no es el cuello de botella;
+la **invariancia a la apariencia** sí.
+
+Esto motiva el trabajo futuro: mejorar la generalización de la visión con **data
+augmentation** (DrQ/RAD) y arquitecturas tipo **IMPALA-CNN**, antes que con más memoria
+temporal.
 
 ---
 
