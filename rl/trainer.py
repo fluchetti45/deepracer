@@ -636,9 +636,33 @@ def resolve_resume_context(args):
     }
 
 
+def _git_branch():
+    try:
+        import subprocess
+        return subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        return ""
+
+
+def _derive_variant(model, n_stack):
+    """Variante legible derivada de lo que el trainer construyo (no de strings)."""
+    if type(model).__name__ == "RecurrentPPO":
+        return "vision_lstm"
+    if type(model.observation_space).__name__ == "Dict":  # obs con imagen
+        return "vision_stacked" if int(n_stack) >= 2 else "vision_1frame"
+    return "geometrica"  # obs vector plano (MlpPolicy)
+
+
 def write_training_run_metadata(args, model, run_paths):
     run_metadata = {
         "run_id": run_paths["run_id"],
+        "variant": _derive_variant(model, args.n_stack),
+        "algo": type(model).__name__,
+        "policy_class": model.policy.__class__.__name__,
+        "git_branch": _git_branch(),
         "run_dir": os.path.abspath(run_paths["run_dir"]),
         "requested_device": args.device,
         "actual_device": str(model.device),
