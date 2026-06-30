@@ -75,7 +75,8 @@ def collect_runs():
         if event_dir is None:
             continue
         runs.append({
-            "variant": classify_variant(meta.get("actual_device", "cpu"), hp.get("n_stack", 1)),
+            "variant": meta.get("variant")
+            or classify_variant(meta.get("actual_device", "cpu"), hp.get("n_stack", 1)),
             "seed": int(hp.get("seed", -1)),
             "total_timesteps": int(hp.get("total_timesteps", 0)),
             "scalars": load_scalars(event_dir),

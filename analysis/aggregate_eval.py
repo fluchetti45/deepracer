@@ -22,20 +22,22 @@ import json
 import os
 import statistics as st
 
-VARIANT_ORDER = ["geometrica", "vision", "vision_stacked"]
+VARIANT_ORDER = ["geometrica", "vision_1frame", "vision_stacked", "vision_lstm"]
 VARIANT_LABEL = {
     "geometrica": "Geometrica",
-    "vision": "Vision (1 frame)",
+    "vision_1frame": "Vision (1 frame)",
     "vision_stacked": "Vision apilada (4)",
+    "vision_lstm": "Vision + LSTM",
 }
 MODELS_DIR = "models"
 OUT_DIR = "analysis"
 
 
 def classify_variant(device, n_stack):
+    """Fallback para runs SIN el campo 'variant' (metadata vieja): deriva de device+n_stack."""
     if device == "cpu":
         return "geometrica"
-    return "vision" if int(n_stack) == 1 else "vision_stacked"
+    return "vision_1frame" if int(n_stack) == 1 else "vision_stacked"
 
 
 def load_runs():
@@ -53,7 +55,8 @@ def load_runs():
         n_stack = hp.get("n_stack", 1)
         runs.append({
             "run_id": os.path.basename(run_dir.rstrip("/\\")),
-            "variant": classify_variant(device, n_stack),
+            # Preferir el campo explicito 'variant' (metadata nueva); si no esta, derivar.
+            "variant": meta.get("variant") or classify_variant(device, n_stack),
             "device": device,
             "n_stack": int(n_stack),
             "seed": int(hp.get("seed", -1)),
