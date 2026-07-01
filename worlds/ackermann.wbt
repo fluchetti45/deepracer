@@ -32,7 +32,7 @@ DEF ARENA RectangleArena {
   floorAppearance Appearance {
     texture DEF FLOOR_TEX ImageTexture {
       url [
-        "track1_ackermann.png"
+        "ackerman1.png"
       ]
       repeatS FALSE
       repeatT FALSE
