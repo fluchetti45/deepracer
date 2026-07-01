@@ -15,6 +15,7 @@ Salidas (en analysis/):
 Uso:  python -m analysis.parse_tensorboard     (desde la raiz del repo)
 """
 
+import argparse
 import glob
 import json
 import os
@@ -22,7 +23,10 @@ import os
 import numpy as np
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
-from analysis.aggregate_eval import classify_variant, VARIANT_ORDER, VARIANT_LABEL
+from analysis.discover import (
+    VARIANT_ORDER, VARIANT_LABEL, classify_variant,
+    discover_runs, select_runs, format_report,
+)
 
 MODELS_DIR = "models"
 OUT_DIR = "analysis"
@@ -62,10 +66,10 @@ def load_scalars(event_dir):
     return out
 
 
-def collect_runs():
-    """Lista de dicts {variant, seed, scalars} por corrida con event files."""
+def collect_runs(run_dirs):
+    """Lista de dicts {variant, seed, scalars} para los run_dirs DADOS con event files."""
     runs = []
-    for run_dir in sorted(glob.glob(os.path.join(MODELS_DIR, "*", ""))):
+    for run_dir in run_dirs:
         meta_path = os.path.join(run_dir, "run_metadata.json")
         if not os.path.exists(meta_path):
             continue
@@ -163,27 +167,28 @@ def plot_curve(curves, key, ylabel, title, out_path, percent=False):
     plt.close()
 
 
-def main():
-    os.makedirs(OUT_DIR, exist_ok=True)
-    runs = collect_runs()
+def run(run_dirs, out_dir=OUT_DIR):
+    """Parsea TB de los run_dirs dados y escribe curves.json/sample_efficiency.json + figs.
+    Devuelve (curves, se) o (None, None) si no habia event files."""
+    os.makedirs(out_dir, exist_ok=True)
+    runs = collect_runs(run_dirs)
     if not runs:
-        print("No se encontraron event files de TensorBoard en models/.")
-        return
+        return None, None
     curves = aggregate_curves(runs)
     se = sample_efficiency(curves)
-
-    json.dump(curves, open(os.path.join(OUT_DIR, "curves.json"), "w", encoding="utf-8"),
+    json.dump(curves, open(os.path.join(out_dir, "curves.json"), "w", encoding="utf-8"),
               indent=2, ensure_ascii=True)
-    json.dump(se, open(os.path.join(OUT_DIR, "sample_efficiency.json"), "w", encoding="utf-8"),
+    json.dump(se, open(os.path.join(out_dir, "sample_efficiency.json"), "w", encoding="utf-8"),
               indent=2, ensure_ascii=True)
-
     plot_curve(curves, "lap_rate", "Lap rate (%)",
-               "Lap rate (train) vs timesteps", os.path.join(OUT_DIR, "fig_lap_rate.png"),
+               "Lap rate (train) vs timesteps", os.path.join(out_dir, "fig_lap_rate.png"),
                percent=True)
     plot_curve(curves, "reward", "Reward medio / episodio",
-               "Reward (train) vs timesteps", os.path.join(OUT_DIR, "fig_reward.png"))
+               "Reward (train) vs timesteps", os.path.join(out_dir, "fig_reward.png"))
+    return curves, se
 
-    # Resumen por consola.
+
+def print_summary(curves, se):
     print("Curvas agregadas por variante (n seeds):")
     for v in VARIANT_ORDER:
         if v in curves:
@@ -197,7 +202,35 @@ def main():
         e = se[v]
         fmt = lambda x: f"{int(x):>12}" if x is not None else f"{'nunca':>12}"
         print(f"  {VARIANT_LABEL[v]:<20}{fmt(e['ts_to_reward_25'])}{fmt(e['ts_to_reward_50'])}{fmt(e['ts_to_reward_75'])}")
-    print(f"\nEscrito: {OUT_DIR}/curves.json, sample_efficiency.json, fig_lap_rate.png, fig_reward.png")
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Parsea curvas de TensorBoard por variante (paper).")
+    p.add_argument("--models-dir", default=MODELS_DIR)
+    p.add_argument("--out-dir", default=OUT_DIR)
+    p.add_argument("--timesteps", type=int, default=None,
+                   help="Fijar el largo exacto de las corridas a incluir (guard anti-mezcla).")
+    p.add_argument("--variants", nargs="+", default=None, help="Subconjunto de variantes.")
+    p.add_argument("--allow-mixed", action="store_true")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    runs = discover_runs(args.models_dir)
+    sel, report = select_runs(runs, timesteps=args.timesteps, variants=args.variants,
+                              allow_mixed=args.allow_mixed)
+    print("Seleccion de corridas (curvas):")
+    print(format_report(report))
+    sel_with_tb = [r["run_dir"] for r in sel if r["has_tb"]]
+    curves, se = run(sel_with_tb, args.out_dir)
+    if curves is None:
+        print("\nNo se encontraron event files de TensorBoard en la seleccion.")
+        return
+    print()
+    print_summary(curves, se)
+    print(f"\nEscrito: {args.out_dir}/curves.json, sample_efficiency.json, "
+          f"fig_lap_rate.png, fig_reward.png")
 
 
 if __name__ == "__main__":

@@ -8,42 +8,40 @@ Identificacion de la variante (acordado con el setup de los datos):
   - device == "cuda" & n_stack==1 -> vision      (1 frame, CNN)
   - device == "cuda" & n_stack==4 -> vision_stacked (4 frames apilados, CNN)
 
+La seleccion de que runs entran (filtros + guard anti-mezcla 500k/1M) vive en
+analysis/discover.py, compartida con parse_tensorboard para analizar el MISMO conjunto.
+
 Salidas (en analysis/):
   - results_summary.json : agregados + por-seed (machine-readable)
   - results_summary.md   : tablas markdown listas para pegar en PAPER.md
 Ademas imprime un resumen por consola.
 
-Uso:  python -m analysis.aggregate_eval     (desde la raiz del repo)
+Uso:  python -m analysis.aggregate_eval [--timesteps N] [--variants ...] [--allow-mixed]
 """
 
+import argparse
 import glob
 import itertools
 import json
 import os
 import statistics as st
 
-VARIANT_ORDER = ["geometrica", "vision_1frame", "vision_stacked", "vision_lstm"]
-VARIANT_LABEL = {
-    "geometrica": "Geometrica",
-    "vision_1frame": "Vision (1 frame)",
-    "vision_stacked": "Vision apilada (4)",
-    "vision_lstm": "Vision + LSTM",
-}
+from analysis.discover import (
+    VARIANT_ORDER, VARIANT_LABEL, classify_variant,
+    discover_runs, select_runs, format_report,
+)
+
 MODELS_DIR = "models"
 OUT_DIR = "analysis"
 
 
-def classify_variant(device, n_stack):
-    """Fallback para runs SIN el campo 'variant' (metadata vieja): deriva de device+n_stack."""
-    if device == "cpu":
-        return "geometrica"
-    return "vision_1frame" if int(n_stack) == 1 else "vision_stacked"
-
-
-def load_runs():
-    """Lee cada run dir: metadata + el eval_results mas reciente. Devuelve lista de dicts."""
+def load_runs(run_dirs):
+    """
+    Lee los run dirs DADOS (ya filtrados por discover): metadata + eval_results mas reciente.
+    Devuelve lista de dicts. Los que no tienen eval_results se saltean (aun no evaluados).
+    """
     runs = []
-    for run_dir in sorted(glob.glob(os.path.join(MODELS_DIR, "*", ""))):
+    for run_dir in run_dirs:
         meta_path = os.path.join(run_dir, "run_metadata.json")
         evals = sorted(glob.glob(os.path.join(run_dir, "eval_results_*.json")))
         if not os.path.exists(meta_path) or not evals:
@@ -137,8 +135,8 @@ def mean_std(values):
     return m, s
 
 
-def aggregate():
-    runs = load_runs()
+def aggregate(run_dirs):
+    runs = load_runs(run_dirs)
     by_variant = {v: [] for v in VARIANT_ORDER}
     for run in runs:
         run["agg"] = per_run_aggregates(run)
@@ -257,18 +255,45 @@ def to_markdown(summary):
     return "\n".join(lines)
 
 
-def main():
-    os.makedirs(OUT_DIR, exist_ok=True)
-    summary = aggregate()
-
-    json_path = os.path.join(OUT_DIR, "results_summary.json")
-    md_path = os.path.join(OUT_DIR, "results_summary.md")
+def run(run_dirs, out_dir=OUT_DIR):
+    """Agrega los run_dirs dados y escribe results_summary.{json,md}. Devuelve (summary, md)."""
+    os.makedirs(out_dir, exist_ok=True)
+    summary = aggregate(run_dirs)
+    json_path = os.path.join(out_dir, "results_summary.json")
+    md_path = os.path.join(out_dir, "results_summary.md")
     json.dump(summary, open(json_path, "w", encoding="utf-8"), indent=2, ensure_ascii=True)
     md = to_markdown(summary)
     open(md_path, "w", encoding="utf-8").write(md)
+    return summary, md
 
-    print(md)
-    print(f"\nEscrito: {json_path}\n         {md_path}")
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Agrega evaluaciones por variante (paper).")
+    p.add_argument("--models-dir", default=MODELS_DIR)
+    p.add_argument("--out-dir", default=OUT_DIR)
+    p.add_argument("--timesteps", type=int, default=None,
+                   help="Fijar el largo exacto de las corridas a incluir (guard anti-mezcla).")
+    p.add_argument("--variants", nargs="+", default=None, help="Subconjunto de variantes.")
+    p.add_argument("--allow-mixed", action="store_true",
+                   help="Poolear runs de distinto largo (por defecto NO, ver discover).")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    runs = discover_runs(args.models_dir)
+    sel, report = select_runs(runs, timesteps=args.timesteps, variants=args.variants,
+                              allow_mixed=args.allow_mixed)
+    print("Seleccion de corridas (eval):")
+    print(format_report(report))
+    sel_with_eval = [r["run_dir"] for r in sel if r["has_eval"]]
+    if not sel_with_eval:
+        print("\nNo hay corridas con eval_results en la seleccion; nada que agregar.")
+        return
+    _, md = run(sel_with_eval, args.out_dir)
+    print("\n" + md)
+    print(f"\nEscrito: {os.path.join(args.out_dir, 'results_summary.json')}"
+          f"\n         {os.path.join(args.out_dir, 'results_summary.md')}")
 
 
 if __name__ == "__main__":

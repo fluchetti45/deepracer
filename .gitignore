@@ -25,6 +25,13 @@ runs/
 *.pth
 vecnormalize.pkl
 
+# ---- Artefactos generados del analisis (solo el codigo va al repo) ----
+analysis/results_summary.json
+analysis/results_summary.md
+analysis/curves.json
+analysis/sample_efficiency.json
+analysis/fig_*.png
+
 # ---- Webots (archivos autogenerados por usuario/proyecto) ----
 worlds/.*.wbproj
 worlds/.*.jpg
