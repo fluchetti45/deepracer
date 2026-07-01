@@ -264,8 +264,17 @@ class PolicyRunner:
         """
         if not isinstance(observation, dict):
             raise RuntimeError(
-                "La observacion para la policy debe ser un dict {velocity, image}."
+                "La observacion para la policy debe ser un dict {velocity, image} o {geometry}."
             )
+
+        # GEOMETRICA: la obs del modelo es el VECTOR (Box) que el supervisor ya arma en
+        # observation["geometry"]. No hay imagen ni stacking (n_stack=1); se normaliza con
+        # el mismo VecNormalize (sobre todo el vector) que en training.
+        if "geometry" in observation:
+            geom = np.asarray(observation["geometry"], dtype=np.float32).reshape(-1)
+            if self.vecnormalize is not None:
+                geom = self.vecnormalize.normalize_obs(geom)
+            return geom
 
         model_obs = {
             "velocity": np.asarray(
