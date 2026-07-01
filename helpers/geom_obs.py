@@ -39,3 +39,35 @@ def build_geom_space():
 def blank_geom():
     """Vector de ceros (fallback cuando no hay frame de camara valido)."""
     return [0.0] * GEOM_OBS_SIZE
+
+
+def geom_vector_from_rgb(rgb, velocity):
+    """
+    Vector geometrico Box(GEOM_OBS_SIZE) desde una imagen RGB HWC + velocity
+    [forward, yaw_rate]. UNICA fuente de la logica: la usa el supervisor de la variante
+    geometrica (obs de training) y el policy_runner para INFERENCIA cross-variante (correr
+    un modelo geometrico desde cualquier rama, reconstruyendo las features desde la camara).
+    Devuelve blank_geom() si no hay imagen valida.
+    """
+    # Import perezoso: road_band_offsets vive en lane_vision (evita ciclos y no rompe la
+    # carga del modulo si una rama todavia no lo tuviera).
+    from helpers.lane_vision import detect_lane, road_band_offsets
+
+    if rgb is None:
+        return blank_geom()
+    try:
+        feats = detect_lane(rgb)
+        band_offsets = road_band_offsets(rgb, GEOM_BANDS)
+    except Exception:
+        return blank_geom()
+
+    b = GEOM_BOUND
+    clip = lambda v: max(-b, min(b, float(v)))  # noqa: E731
+    obs = [
+        clip(velocity[0]), clip(velocity[1]),
+        clip(feats.get("road_frac", 0.0)),
+        clip(feats.get("center_green", 0.0)),
+    ]
+    obs += [clip(o) for o in band_offsets]
+    obs += [0.0] * (GEOM_OBS_SIZE - len(obs))  # padding defensivo
+    return obs[:GEOM_OBS_SIZE]

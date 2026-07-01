@@ -16,7 +16,7 @@ from helpers.policy_runner import PolicyRunner
 from helpers.image_obs import blank_image_payload
 from helpers.lane_vision import decode_rgb_hwc, detect_lane, road_band_offsets
 from helpers.track_progress import build_loop, project_s, signed_delta
-from helpers.geom_obs import GEOM_BANDS, GEOM_BOUND, blank_geom
+from helpers.geom_obs import GEOM_BANDS, GEOM_BOUND, blank_geom, geom_vector_from_rgb
 
 
 # Domain randomization de la pose del robot al inicio de cada episodio: jitter de
@@ -634,7 +634,7 @@ class SupervisorController:
 
     def _handle_policy_debug_request(self):
         self._refresh_robot_observation()
-        obs  = self._build_nav_observation()
+        obs  = self._build_inference_observation()
         rp   = self.epuck_robot.getPosition()
 
         predicted_action = None
@@ -680,7 +680,7 @@ class SupervisorController:
 
         try:
             self._refresh_robot_observation()
-            obs = self._build_nav_observation()
+            obs = self._build_inference_observation()
             action = self.policy_runner.predict(obs)
         except Exception as exc:
             log_supervisor(f"[Supervisor] error al predecir accion: {exc}", force=True)
@@ -1164,6 +1164,22 @@ class SupervisorController:
     def _build_nav_observation(self) -> dict:
         # Rama geometrica: la obs es un VECTOR de features (sin imagen).
         return {"geometry": self._compute_geometry_obs()}
+
+    def _build_inference_observation(self) -> dict:
+        """
+        Observacion SUPERSET para inferencia en vivo (robot window / policy step). Trae las
+        tres representaciones desde los sensores crudos, para que el policy_runner pueda
+        correr CUALQUIER modelo (geometrico o de vision) desde esta rama: el runner elige el
+        subconjunto segun el observation_space del modelo. La geometria se reconstruye con la
+        MISMA logica del training (helpers.geom_obs.geom_vector_from_rgb).
+        """
+        velocity = self._compute_velocity()
+        rgb = decode_rgb_hwc(self.last_observation_image)
+        return {
+            "velocity": velocity,
+            "image": self.last_observation_image or blank_image_payload(),
+            "geometry": geom_vector_from_rgb(rgb, velocity),
+        }
 
     def _perception_features(self):
         """
