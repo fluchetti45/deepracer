@@ -117,6 +117,13 @@ def detect_lane(rgb):
     center_green = float(green[:, c0:c1].sum()) / band_area
     center_road = max(0.0, 1.0 - center_white - center_green)
 
+    # RGB CRUDO medio de la banda central (sin umbralizar): es lo que realmente renderiza
+    # la camara. Sirve para CALIBRAR los umbrales de color contra una pista nueva (manejar
+    # sobre el pasto y leer este valor), porque green_center ya viene filtrado por el umbral
+    # y daria ~0 justo cuando el umbral no matchea el verde nuevo.
+    band_px = roi[:, c0:c1, :].reshape(-1, 3)
+    center_rgb = [int(round(v)) for v in band_px.mean(axis=0)] if band_px.size else None
+
     # Offset firmado: hacia donde esta la CALZADA (centroide del road respecto al
     # centro). En una curva el road se corre hacia un lado -> indica el steer.
     rc = _centroid_col(road, roi_w)
@@ -136,6 +143,8 @@ def detect_lane(rgb):
         "center_clearance": center_road,
         "center_white": center_white,
         "center_green": center_green,
+        # RGB medio crudo de la banda central (para calibrar umbrales de color).
+        "center_rgb": center_rgb,
         "offset": offset,
         # line_visible ahora = hay calzada visible (queda el mismo nombre de campo)
         "line_visible": bool(road_visible),
