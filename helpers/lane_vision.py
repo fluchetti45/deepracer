@@ -33,8 +33,15 @@ CENTER_BAND_FRAC = read_env_value("LANE_CENTER_BAND_FRAC", 0.34)
 # Umbrales de color RGB (0-255). Solo necesitamos distinguir borde blanco y pasto
 # verde; el resto (asfalto gris + linea amarilla) es calzada drivable.
 WHITE_MIN = read_env_value("LANE_WHITE_MIN", 175, int)
+# Pasto: verde brillante que le gana claramente al ROJO. NO exigimos que le gane al
+# AZUL, porque el fondo oficial de DeepRacer es un verde-azulado (PMS 3395 C, que la
+# camara renderiza ~[10,175,157], con azul alto). En vez de "g-b grande", limitamos
+# cuanto puede superar el azul al verde (LANE_GREEN_BLUE_SLACK): asi entra el teal pero
+# se excluye el azul puro (donde el azul domina). Verde-amarillo viejo y teal pasan; sky
+# (excluido por el ROI igual) y azul profundo no.
 GREEN_G_MIN = read_env_value("LANE_GREEN_G_MIN", 60, int)
 GREEN_MARGIN = read_env_value("LANE_GREEN_MARGIN", 25, int)
+GREEN_BLUE_SLACK = read_env_value("LANE_GREEN_BLUE_SLACK", 40, int)
 
 
 def decode_rgb_hwc(image_payload):
@@ -65,7 +72,13 @@ def _edge_masks(rgb):
     g = rgb[:, :, 1].astype(np.int16)
     b = rgb[:, :, 2].astype(np.int16)
     white = (r >= WHITE_MIN) & (g >= WHITE_MIN) & (b >= WHITE_MIN)
-    green = (g >= GREEN_G_MIN) & (g - r >= GREEN_MARGIN) & (g - b >= GREEN_MARGIN)
+    # Pasto: verde brillante, domina al rojo, y el azul no lo supera por mas de SLACK
+    # (cubre tanto el verde-amarillo viejo como el teal PMS 3395 C; excluye azul puro).
+    green = (
+        (g >= GREEN_G_MIN)
+        & (g - r >= GREEN_MARGIN)
+        & (b - g <= GREEN_BLUE_SLACK)
+    )
     return white, green
 
 
@@ -106,6 +119,13 @@ def detect_lane(rgb):
     center_green = float(green[:, c0:c1].sum()) / band_area
     center_road = max(0.0, 1.0 - center_white - center_green)
 
+    # RGB CRUDO medio de la banda central (sin umbralizar): es lo que realmente renderiza
+    # la camara. Sirve para CALIBRAR los umbrales de color contra una pista nueva (manejar
+    # sobre el pasto y leer este valor), porque green_center ya viene filtrado por el umbral
+    # y daria ~0 justo cuando el umbral no matchea el verde nuevo.
+    band_px = roi[:, c0:c1, :].reshape(-1, 3)
+    center_rgb = [int(round(v)) for v in band_px.mean(axis=0)] if band_px.size else None
+
     # Offset firmado: hacia donde esta la CALZADA (centroide del road respecto al
     # centro). En una curva el road se corre hacia un lado -> indica el steer.
     rc = _centroid_col(road, roi_w)
@@ -125,6 +145,8 @@ def detect_lane(rgb):
         "center_clearance": center_road,
         "center_white": center_white,
         "center_green": center_green,
+        # RGB medio crudo de la banda central (para calibrar umbrales de color).
+        "center_rgb": center_rgb,
         "offset": offset,
         # line_visible ahora = hay calzada visible (queda el mismo nombre de campo)
         "line_visible": bool(road_visible),
