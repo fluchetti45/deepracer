@@ -14,6 +14,7 @@ from helpers.read_env_value import read_env_value
 from helpers.training_server import TrainingServer
 from helpers.policy_runner import PolicyRunner
 from helpers.image_obs import blank_image_payload
+from helpers.geom_obs import geom_vector_from_rgb
 from helpers.lane_vision import decode_rgb_hwc, detect_lane
 from helpers.track_progress import build_loop, project_s, signed_delta
 
@@ -607,7 +608,7 @@ class SupervisorController:
 
     def _handle_policy_debug_request(self):
         self._refresh_robot_observation()
-        obs  = self._build_nav_observation()
+        obs  = self._build_inference_observation()
         rp   = self.epuck_robot.getPosition()
 
         predicted_action = None
@@ -666,7 +667,7 @@ class SupervisorController:
 
         try:
             self._refresh_robot_observation()
-            obs = self._build_nav_observation()
+            obs = self._build_inference_observation()
             action = self.policy_runner.predict(obs)
         except Exception as exc:
             log_supervisor(f"[Supervisor] error al predecir accion: {exc}", force=True)
@@ -1171,6 +1172,22 @@ class SupervisorController:
         ):
             self.last_observation_image = image
         return self.last_observation_image
+
+    def _build_inference_observation(self) -> dict:
+        """
+        Observacion SUPERSET para inferencia en vivo (robot window / policy step). Trae las
+        tres representaciones desde los sensores crudos, para que el policy_runner pueda
+        correr CUALQUIER modelo (geometrico o de vision) desde esta rama: el runner elige el
+        subconjunto segun el observation_space del modelo. La geometria se reconstruye con la
+        MISMA logica del training (helpers.geom_obs.geom_vector_from_rgb).
+        """
+        velocity = self._compute_velocity()
+        rgb = decode_rgb_hwc(self.last_observation_image)
+        return {
+            "velocity": velocity,
+            "image": self.last_observation_image or blank_image_payload(),
+            "geometry": geom_vector_from_rgb(rgb, velocity),
+        }
 
     def _build_nav_observation(self) -> dict:
         # Vision-pura: la obs es {image, velocity}.

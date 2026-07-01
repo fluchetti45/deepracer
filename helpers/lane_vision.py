@@ -151,3 +151,33 @@ def detect_lane(rgb):
         # line_visible ahora = hay calzada visible (queda el mismo nombre de campo)
         "line_visible": bool(road_visible),
     }
+
+
+def road_band_offsets(rgb, n_bands):
+    """
+    Offset horizontal del centroide de CALZADA en `n_bands` franjas horizontales de la
+    ROI, ordenadas de CERCA (abajo de la imagen) a LEJOS (arriba). Cada valor en [-1, 1]
+    (centro de la imagen = 0; <0 izquierda, >0 derecha). Si una franja no tiene calzada,
+    devuelve 0.0. Traza HACIA DONDE va la pista adelante (curvatura), derivado de la imagen
+    de este timestep -> track-agnostico. Lo usa geom_obs.geom_vector_from_rgb (inferencia
+    cross-variante de modelos geometricos desde cualquier rama).
+    """
+    height, width, _ = rgb.shape
+    top = int(ROI_TOP_FRAC * height)
+    top = min(max(top, 0), max(height - 1, 0))
+    roi = rgb[top:, :, :]
+    white, green = _edge_masks(roi)
+    road = ~(white | green)
+    roi_h = road.shape[0]
+    band_h = max(1, roi_h // max(1, n_bands))
+    half_w = width / 2.0 or 1.0
+    offsets = []
+    for b in range(n_bands):
+        hi = roi_h - b * band_h
+        lo = max(0, roi_h - (b + 1) * band_h)
+        col = _centroid_col(road[lo:hi, :], width)
+        if col is None:
+            offsets.append(0.0)
+        else:
+            offsets.append(float(max(-1.0, min(1.0, (col - half_w) / half_w))))
+    return offsets
