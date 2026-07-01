@@ -32,6 +32,73 @@
       </section>
 
       <section class="card">
+        <h2>Pista</h2>
+        <p>
+          Cambia la textura del piso para probar/calibrar a mano sobre cualquier
+          pista (incluidas las de eval). Si la pista tiene spawn, teleporta el robot.
+        </p>
+        <div class="status-grid">
+          <div class="status-row">
+            <span class="label">Seleccionar pista</span>
+            <select id="track-select">
+              <option value="">(sin pistas)</option>
+            </select>
+          </div>
+          <div class="status-row">
+            <span class="label">Pista actual</span>
+            <code id="current-track">N/A</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Carril / Off-track</h2>
+        <p>
+          Estado de visión del supervisor. <strong>center_rgb</strong> es el color
+          CRUDO (sin umbralizar) de la banda central: el verde que realmente renderiza
+          la cámara. Usalo para calibrar el umbral de off-track contra cada pista.
+        </p>
+        <div class="status-grid">
+          <div class="status-row">
+            <span class="label">center_rgb (verde renderizado)</span>
+            <div style="display: flex; align-items: center; gap: 10px">
+              <span
+                id="lane-rgb-swatch"
+                style="
+                  width: 26px;
+                  height: 26px;
+                  border-radius: 4px;
+                  border: 1px solid #888;
+                  background: #000;
+                  display: inline-block;
+                "></span>
+              <code id="lane-rgb">N/A</code>
+            </div>
+          </div>
+          <div class="status-row">
+            <span class="label">green_center (fracción ya umbralizada)</span>
+            <code id="lane-green-center">N/A</code>
+          </div>
+          <div class="status-row">
+            <span class="label">white_center</span>
+            <code id="lane-white-center">N/A</code>
+          </div>
+          <div class="status-row">
+            <span class="label">center_clearance</span>
+            <code id="lane-clearance">N/A</code>
+          </div>
+          <div class="status-row">
+            <span class="label">offset</span>
+            <code id="lane-offset">N/A</code>
+          </div>
+          <div class="status-row">
+            <span class="label">line_visible (hay calzada)</span>
+            <code id="lane-line-visible">N/A</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
         <h2>Control de Policy</h2>
         <p>Carga, activa y desactiva la politica entrenada del robot.</p>
         <div class="button-grid">
