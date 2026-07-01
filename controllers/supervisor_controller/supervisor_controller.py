@@ -87,6 +87,10 @@ REWARD_WHITE_W = read_env_value("REWARD_WHITE_W", 0.5)
 REWARD_STEP_COST = read_env_value("REWARD_STEP_COST", 0.0)
 # Off-track: fraccion de pasto en la banda central para declarar que se fue.
 OFFTRACK_GREEN_FRAC = read_env_value("OFFTRACK_GREEN_FRAC", 0.4)
+# Gracia de off-track: steps CONSECUTIVOS sobre pasto antes de terminar. No se corta apenas
+# se detecta verde (podria ser una curva muy cerrada o un desvio momentaneo del que se
+# recupera); recien se termina si sigue afuera OFFTRACK_GRACE_STEPS pasos seguidos.
+OFFTRACK_GRACE_STEPS = read_env_value("OFFTRACK_GRACE_STEPS", 6, int)
 # Reward terminal al salirse de la pista.
 OFFTRACK_PENALTY = read_env_value("OFFTRACK_PENALTY", -1.0)
 # Penalizacion por step sin ver ninguna marca (carril perdido).
@@ -170,6 +174,7 @@ class SupervisorController:
         self.episode_id = 0
         self.episode_step = 0
         self.lost_line_steps = 0
+        self.offtrack_steps = 0
         self.policy_runner = PolicyRunner()
         self.policy_status = self.policy_runner.status_dict()
         self.policy_debug_snapshot = None
@@ -506,6 +511,7 @@ class SupervisorController:
         # estado de carril (si no, contamina el siguiente episodio).
         self.policy_runner.reset_stack()
         self.lost_line_steps = 0
+        self.offtrack_steps = 0
         self.last_reward_breakdown = None
 
     def _capture_debug_frame(self, mode=None):
@@ -896,6 +902,7 @@ class SupervisorController:
         self.episode_step = 0
         # Nuevo episodio: limpiar estado de carril, progreso y el stack de la policy.
         self.lost_line_steps = 0
+        self.offtrack_steps = 0
         self._init_progress()
         self.last_reward_breakdown = None
         self.policy_runner.reset_stack()
@@ -949,13 +956,10 @@ class SupervisorController:
                 green_center=green_center, white_center=white_center, line_visible=line_visible,
             )
 
-        # --- Off-track: pasto en el centro => terminal. ---
-        if has_features and green_center >= OFFTRACK_GREEN_FRAC:
-            return self._reward_dict(
-                reward=float(OFFTRACK_PENALTY), terminated=True, term_reason="offtrack_grass",
-                clearance=clearance, offset=offset, speed=speed_fwd, progress=progress_delta,
-                green_center=green_center, white_center=white_center, line_visible=line_visible,
-            )
+        # --- Off-track: pasto en el centro. Solo SEÑAL, no termina aca: la terminacion
+        #     (con gracia de OFFTRACK_GRACE_STEPS) la decide el step handler, por si es una
+        #     curva muy cerrada o un desvio del que se recupera. ---
+        offtrack = bool(has_features and green_center >= OFFTRACK_GREEN_FRAC)
 
         # --- Avance: PROGRESO sobre el circuito (si hay gates) o velocidad vision. ---
         # Gateado por clearance: solo cobra fuerte avanzando Y sobre la calzada.
@@ -979,6 +983,7 @@ class SupervisorController:
             reward=float(reward), terminated=False, term_reason=None,
             clearance=clearance, offset=offset, speed=speed_fwd, progress=progress_delta,
             green_center=green_center, white_center=white_center, line_visible=line_visible,
+            offtrack=offtrack,
             r_drive=r_base + r_forward, r_offset=r_offset, r_white=r_white,
             r_lost=r_lost, r_step=r_step,
         )
@@ -986,13 +991,16 @@ class SupervisorController:
     @staticmethod
     def _reward_dict(reward, terminated, term_reason, clearance, offset,
                      green_center, white_center, line_visible, speed=0.0,
-                     progress=None, r_drive=0.0, r_offset=0.0, r_white=0.0,
+                     progress=None, offtrack=False, r_drive=0.0, r_offset=0.0, r_white=0.0,
                      r_lost=0.0, r_step=0.0):
         """Estructura uniforme del desglose de reward (misma forma siempre)."""
         return {
             "reward": round(float(reward), 4),
             "terminated": bool(terminated),
             "term_reason": term_reason,
+            # Señal de off-track (pasto en el centro). La terminacion con gracia la maneja
+            # el step handler; aca es solo la deteccion por-frame.
+            "offtrack": bool(offtrack),
             # Features observadas
             "center_clearance": round(clearance, 4),
             "offset": round(offset, 4) if offset is not None else None,
@@ -1036,7 +1044,19 @@ class SupervisorController:
         else:
             self.lost_line_steps += 1
 
+        # Off-track con gracia: contar pasos CONSECUTIVOS sobre pasto. No se corta apenas se
+        # detecta (curva cerrada / desvio momentaneo); recien tras OFFTRACK_GRACE_STEPS. Se
+        # evalua ANTES que line_lost para que ese sea el motivo de corte cuando aplica.
+        if breakdown.get("offtrack"):
+            self.offtrack_steps += 1
+        else:
+            self.offtrack_steps = 0
+
         terminated = breakdown["terminated"]
+        if not terminated and self.offtrack_steps >= OFFTRACK_GRACE_STEPS:
+            terminated = True
+            breakdown["term_reason"] = "offtrack_grass"
+            breakdown["reward"] = round(float(OFFTRACK_PENALTY), 4)
         if not terminated and self.lost_line_steps >= LOST_LINE_MAX_STEPS:
             terminated = True
             breakdown["term_reason"] = "line_lost"
@@ -1058,6 +1078,7 @@ class SupervisorController:
                 "reward_breakdown": breakdown,
                 "episode_step": self.episode_step,
                 "lost_line_steps": self.lost_line_steps,
+                "offtrack_steps": self.offtrack_steps,
                 "track": self.current_track_texture,
                 "cumulative_progress": round(self.cumulative_progress, 4),
             },
