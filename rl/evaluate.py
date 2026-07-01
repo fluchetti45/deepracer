@@ -425,10 +425,16 @@ def save_eval_results(args, model_zip, n_stack, results):
     out_dir = model_path if os.path.isdir(model_path) else os.path.dirname(model_zip)
     stamp = time.strftime("%Y%m%d%H%M%S")
     out_path = os.path.join(out_dir, f"eval_results_{stamp}.json")
+    # Modo real de la corrida: "episodes" (N fijos, tasa de exito sin sesgo) o "laps"
+    # (hasta juntar --laps vueltas). requested_per_track = el N efectivo de ese modo.
+    mode = "episodes" if args.episodes is not None else "laps"
+    requested = int(args.episodes) if args.episodes is not None else int(args.laps)
     payload = {
         "model": os.path.abspath(model_zip),
         "n_stack": int(n_stack),
-        "laps_requested": int(args.laps),
+        "mode": mode,
+        "requested_per_track": requested,
+        "laps_requested": int(args.laps),  # solo significativo en modo "laps"
         "max_episode_steps": int(args.max_episode_steps),
         "deterministic": not args.stochastic,
         "dt": float(args.dt),
@@ -474,10 +480,17 @@ def print_track_summary(result, args):
 
 def print_overall_summary(results, args):
     """Tabla final comparando todos los tracks evaluados."""
+    # Denominador y etiqueta segun el MODO real (episodios fijos vs hasta --laps
+    # vueltas), no el default de --laps: en modo --episodes la fraccion es vueltas/ep.
+    if args.episodes is not None:
+        n_req, unidad = args.episodes, "episodios"
+    else:
+        n_req, unidad = args.laps, "vueltas pedidas"
     print("=" * 56)
-    print(f"RESUMEN GLOBAL ({len(results)} tracks, {args.laps} vueltas pedidas c/u)")
+    print(f"RESUMEN GLOBAL ({len(results)} tracks, {n_req} {unidad} c/u)")
     print("-" * 56)
-    print(f"  {'track':<16}{'vueltas':>9}{'prom steps':>12}{'prom seg':>10}")
+    header = "vueltas/ep" if args.episodes is not None else "vueltas"
+    print(f"  {'track':<16}{header:>11}{'prom steps':>12}{'prom seg':>10}")
     for result in results:
         lap_steps = result["lap_steps"]
         if lap_steps:
@@ -487,8 +500,8 @@ def print_overall_summary(results, args):
         else:
             steps_txt = "-"
             secs_txt = "-"
-        vueltas = f"{len(lap_steps)}/{args.laps}"
-        print(f"  {result['texture']:<16}{vueltas:>9}{steps_txt:>12}{secs_txt:>10}")
+        vueltas = f"{len(lap_steps)}/{n_req}"
+        print(f"  {result['texture']:<16}{vueltas:>11}{steps_txt:>12}{secs_txt:>10}")
     print("=" * 56)
 
 
