@@ -32,9 +32,14 @@ CENTER_BAND_FRAC = read_env_value("LANE_CENTER_BAND_FRAC", 0.34)
 
 # Umbrales de color RGB (0-255). Solo necesitamos distinguir borde blanco y pasto
 # verde; el resto (asfalto gris + linea amarilla) es calzada drivable.
+# El pasto se detecta por "verde brillante que le gana al ROJO". NO se exige que le gane al
+# AZUL, para tolerar el verde oficial DeepRacer (PMS 3395 C, que la camara renderiza como un
+# verde-azulado ~[10,175,157] con azul alto): se limita cuanto puede el azul superar al verde
+# (LANE_GREEN_BLUE_SLACK). Cubre tanto el verde-amarillo viejo como el teal; excluye azul puro.
 WHITE_MIN = read_env_value("LANE_WHITE_MIN", 175, int)
 GREEN_G_MIN = read_env_value("LANE_GREEN_G_MIN", 60, int)
 GREEN_MARGIN = read_env_value("LANE_GREEN_MARGIN", 25, int)
+GREEN_BLUE_SLACK = read_env_value("LANE_GREEN_BLUE_SLACK", 40, int)
 
 
 def decode_rgb_hwc(image_payload):
@@ -65,7 +70,13 @@ def _edge_masks(rgb):
     g = rgb[:, :, 1].astype(np.int16)
     b = rgb[:, :, 2].astype(np.int16)
     white = (r >= WHITE_MIN) & (g >= WHITE_MIN) & (b >= WHITE_MIN)
-    green = (g >= GREEN_G_MIN) & (g - r >= GREEN_MARGIN) & (g - b >= GREEN_MARGIN)
+    # Pasto: verde brillante, domina al rojo, y el azul no lo supera por mas de SLACK
+    # (cubre tanto el verde-amarillo viejo como el teal PMS 3395 C; excluye azul puro).
+    green = (
+        (g >= GREEN_G_MIN)
+        & (g - r >= GREEN_MARGIN)
+        & (b - g <= GREEN_BLUE_SLACK)
+    )
     return white, green
 
 
