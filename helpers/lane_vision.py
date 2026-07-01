@@ -35,6 +35,7 @@ CENTER_BAND_FRAC = read_env_value("LANE_CENTER_BAND_FRAC", 0.34)
 WHITE_MIN = read_env_value("LANE_WHITE_MIN", 175, int)
 GREEN_G_MIN = read_env_value("LANE_GREEN_G_MIN", 60, int)
 GREEN_MARGIN = read_env_value("LANE_GREEN_MARGIN", 25, int)
+GREEN_BLUE_SLACK = read_env_value("LANE_GREEN_BLUE_SLACK", 40, int)
 
 
 def decode_rgb_hwc(image_payload):
@@ -65,7 +66,13 @@ def _edge_masks(rgb):
     g = rgb[:, :, 1].astype(np.int16)
     b = rgb[:, :, 2].astype(np.int16)
     white = (r >= WHITE_MIN) & (g >= WHITE_MIN) & (b >= WHITE_MIN)
-    green = (g >= GREEN_G_MIN) & (g - r >= GREEN_MARGIN) & (g - b >= GREEN_MARGIN)
+    # Pasto: verde brillante, domina al rojo, y el azul no lo supera por mas de SLACK
+    # (cubre tanto el verde-amarillo viejo como el teal PMS 3395 C; excluye azul puro).
+    green = (
+        (g >= GREEN_G_MIN)
+        & (g - r >= GREEN_MARGIN)
+        & (b - g <= GREEN_BLUE_SLACK)
+    )
     return white, green
 
 
