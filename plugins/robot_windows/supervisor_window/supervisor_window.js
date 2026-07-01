@@ -175,22 +175,46 @@ function renderRewardMetrics(snapshot) {
     renderKeyValueRows("policy-debug-reward-metrics", [], "Todavia no hay metricas de reward.");
     return;
   }
-  const entries = Object.entries(reward).filter(([key]) =>
-    [
-      "distance",
-      "reward",
-      "forward_alignment",
-      "heading_reward",
-      "no_progress",
-      "no_progress_penalty",
-      "collision_penalty",
-      "step_cost",
-      "terminated",
-      "arrival_bonus",
-      "collision",
-    ].includes(key)
-  );
-  renderKeyValueRows("policy-debug-reward-metrics", entries, "Todavia no hay metricas de reward.");
+  // El breakdown ya viene curado por el supervisor (reward de vision actual): mostrar
+  // todas sus claves en vez de filtrar por una lista fija (que quedaba vieja).
+  renderKeyValueRows("policy-debug-reward-metrics", Object.entries(reward), "Todavia no hay metricas de reward.");
+}
+
+function renderLane(lane) {
+  const swatch = document.getElementById("lane-rgb-swatch");
+  const rgb = lane?.center_rgb;
+  if (Array.isArray(rgb) && rgb.length === 3) {
+    updateText("lane-rgb", `[${rgb[0]}, ${rgb[1]}, ${rgb[2]}]`);
+    swatch.style.background = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+  } else {
+    updateText("lane-rgb", "N/A");
+    swatch.style.background = "#000";
+  }
+  const fix = (v) => (typeof v === "number" ? v.toFixed(4) : "N/A");
+  updateText("lane-green-center", fix(lane?.green_center));
+  updateText("lane-white-center", fix(lane?.white_center));
+  updateText("lane-clearance", fix(lane?.center_clearance));
+  updateText("lane-offset", fix(lane?.offset));
+  updateText("lane-line-visible", lane?.line_visible ? "si" : "no");
+}
+
+let trackSelectPopulated = false;
+
+function populateTrackSelector(tracks, current) {
+  const sel = document.getElementById("track-select");
+  if (!sel) return;
+  if (Array.isArray(tracks) && tracks.length && !trackSelectPopulated) {
+    sel.replaceChildren();
+    tracks.forEach((t) => {
+      const opt = document.createElement("option");
+      opt.value = t;
+      opt.textContent = t;
+      sel.appendChild(opt);
+    });
+    trackSelectPopulated = true;
+  }
+  if (current) sel.value = current;
+  updateText("current-track", current ?? "N/A");
 }
 
 function normalizeSelectedPath(fileInput) {
@@ -254,6 +278,11 @@ function wireButtons() {
 
   document.getElementById("capture-frame").addEventListener("click", () => {
     sendMessage({ type: "capture_frame", mode: "full" });
+  });
+
+  document.getElementById("track-select").addEventListener("change", (event) => {
+    const texture = event.target.value;
+    if (texture) sendMessage({ type: "set_track", texture });
   });
 
   document.getElementById("request-policy-debug").addEventListener("click", () => {
@@ -356,6 +385,10 @@ window.onload = () => {
       document.getElementById("policy-deterministic").checked =
         !!data.policy_status.deterministic;
     }
+
+    // Estado de carril (vision-pura) + selector de pista.
+    renderLane(data.lane ?? null);
+    populateTrackSelector(data.available_tracks ?? null, data.current_track ?? null);
 
     const snapshot = data.policy_debug_snapshot ?? null;
     updateText("policy-debug-summary", formatPolicyDebugSnapshot(snapshot));
