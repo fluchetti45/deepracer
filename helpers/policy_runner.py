@@ -91,6 +91,10 @@ class PolicyRunner:
         self.is_recurrent = False
         self._lstm_states = None
         self._episode_start = True
+        # Variante segun el obs-space del modelo: True = geometrica (Box), False = vision
+        # (Dict {image, velocity}). Se infiere en load(); decide que obs arma el runner
+        # desde el superset del supervisor -> cualquier rama corre cualquier modelo.
+        self.is_geometric = False
 
     # ------------------------------------------------------------------
     # Carga / descarga
@@ -158,6 +162,8 @@ class PolicyRunner:
             self.include_target_image = "target_image" in model.observation_space.spaces
         except Exception:
             self.include_target_image = False
+        # Variante: Box (geometrica) vs Dict (vision). Dict expone .spaces; Box no.
+        self.is_geometric = not hasattr(model.observation_space, "spaces")
         return resolved_model_path
 
     def unload(self):
@@ -264,8 +270,19 @@ class PolicyRunner:
         """
         if not isinstance(observation, dict):
             raise RuntimeError(
-                "La observacion para la policy debe ser un dict {velocity, image}."
+                "La observacion para la policy debe ser un dict {velocity, image} o {geometry}."
             )
+
+        # GEOMETRICA (modelo con obs Box): usar el VECTOR observation["geometry"] del
+        # superset. No hay imagen ni stacking (n_stack=1); se normaliza con el mismo
+        # VecNormalize (sobre todo el vector) que en training. Se elige por el obs-space
+        # del MODELO (is_geometric), no por presencia de la key, asi el superset del
+        # supervisor sirve tanto a modelos geometricos como de vision.
+        if self.is_geometric:
+            geom = np.asarray(observation.get("geometry"), dtype=np.float32).reshape(-1)
+            if self.vecnormalize is not None:
+                geom = self.vecnormalize.normalize_obs(geom)
+            return geom
 
         model_obs = {
             "velocity": np.asarray(
