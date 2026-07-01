@@ -1,8 +1,12 @@
 # Conducción autónoma estilo DeepRacer en Webots: el rol de la representación de la observación
 
 > Informe técnico / paper en progreso.
-> **Resultados de evaluación cargados** (§6) a partir de 15 corridas: 5 seeds × 3 variantes,
-> 500k timesteps. Pendiente: curvas de TensorBoard (§6.1/6.3) y la variante LSTM.
+> **Metodología (§1–5) actualizada al sistema actual**: 4 variantes (se agrega LSTM), pistas
+> `track1–8` train + `track9–10` eval, fondo unificado al verde oficial DeepRacer (PMS 3395 C)
+> con detección de off-track por color recalibrada (§3.4) y **gracia** de off-track.
+> **§6 son resultados PRELIMINARES** de un piloto (500k timesteps, 3 variantes, eval `track4/5`);
+> se reemplazan por la corrida final (**1M timesteps × 5 seeds × 4 variantes**, eval `track9/10`)
+> en curso.
 
 ---
 
@@ -14,13 +18,18 @@ simuladas en Webots, usando **PPO** (Proximal Policy Optimization). El objetivo 
 manteniendo _todo lo demás constante_: mismo robot, mismo espacio de acción, mismas
 pistas, mismos hiperparámetros y —crucialmente— **la misma función de reward**.
 
-Comparamos tres variantes que solo difieren en _qué ve el agente_:
+Comparamos cuatro variantes que solo difieren en _qué ve el agente_ (o cómo integra lo
+que ve en el tiempo):
 
 1. **Geométrica** — la observación es un vector de **métricas derivadas localmente de
    la imagen** (no los píxeles).
 2. **Visión** — la observación es la **imagen cruda** de la cámara frontal (un frame).
-3. **Visión apilada** — igual que Visión pero con **4 frames apilados** (información
-   temporal).
+3. **Visión apilada** — igual que Visión pero con **4 frames apilados** (memoria temporal
+   por _stacking_).
+4. **Visión + LSTM** — igual que Visión (1 frame) pero con una **política recurrente**
+   (`RecurrentPPO`): la memoria temporal la aporta el estado oculto del LSTM en vez del
+   apilado. Sirve para preguntar si la temporalidad ayuda cuando se la da de forma
+   _recurrente_ y no por stacking.
 
 El reward usa **información privilegiada del simulador** (progreso sobre el circuito,
 detección de vuelta completa y de conduccion en sentido contrario) que el agente **no** recibe en su observación.
@@ -43,7 +52,7 @@ La pregunta de investigación es:
 > agregar memoria temporal apilando frames?
 
 Para que la comparación sea atribuible _solo_ a la observación, fijamos un entorno y un
-reward idénticos entre las tres variantes (Sección 3) y variamos únicamente el bloque de
+reward idénticos entre las cuatro variantes (Sección 3) y variamos únicamente el bloque de
 observación + el extractor de features de la política (Sección 4).
 
 ---
@@ -59,8 +68,9 @@ Modelamos la tarea como un **MDP de horizonte finito** resuelto con PPO.
 - **Acción** `aₜ`: comando continuo de las dos ruedas (Sección 4.4).
 - **Reward** `rₜ`: función del progreso sobre el circuito y de la seguridad
   (Sección 3.3). **Idéntica entre variantes.**
-- **Terminación**: salida de pista, contramano sostenido, carril perdido, o vuelta
-  completada (éxito). **Truncado** por límite de pasos.
+- **Terminación**: salida de pista (**con gracia**: recién tras varios pasos seguidos
+  sobre pasto, §3.4), contramano sostenido, carril perdido, o vuelta completada (éxito).
+  **Truncado** por límite de pasos.
 
 ### 2.1 Robot y simulador
 
@@ -71,18 +81,23 @@ Modelamos la tarea como un **MDP de horizonte finito** resuelto con PPO.
 | Robot                        | e-puck, tracción **diferencial** (2 ruedas)                        |
 | Cámara                       | frontal, RGB **84×84**, montada mirando levemente hacia abajo      |
 | Frame-skip (`ACTION_REPEAT`) | 5 ticks por acción                                                 |
-| Pasos máx. por episodio      | 1000 (`MAX_EPISODE_STEPS`)                                         |
+| Pasos máx. por episodio      | 2500 train (`MAX_EPISODE_STEPS`) · 2000 eval (`EVAL_MAX_EPISODE_STEPS`) |
 | Domain randomization         | jitter de pose sobre el spawn al inicio del episodio               |
 
-> **Nota de generalización**: el entrenamiento usa varias pistas (`track1`–`track3`) y
-> la evaluación pistas _held-out_ (`track4`–`track5`), nunca vistas en entrenamiento.
+> **Nota sobre el cap de episodio**: una vuelta toma ~1080 pasos; con el cap viejo de 1000
+> **ninguna** vuelta entraba en el episodio de training, así que el agente nunca
+> experimentaba el `LAP_BONUS`. Se subió a **2500** (≈2 vueltas + margen anti-loop).
+
+> **Nota de generalización**: el entrenamiento usa **8 pistas** (`track1`–`track8`, con
+> _gates_ de progreso) y la evaluación **2 pistas _held-out_** (`track9`, `track10`, solo
+> spawn, sin gates), nunca vistas en entrenamiento.
 
 ---
 
 ## 3. Entorno y reward compartidos (lo que NO cambia entre variantes)
 
 Esta es la parte central del diseño experimental: **el contrato entre el agente y el
-entorno es idéntico en las tres variantes**, salvo la observación.
+entorno es idéntico en las cuatro variantes**, salvo la observación.
 
 ### 3.1 Arquitectura cliente–servidor
 
@@ -117,11 +132,10 @@ información a la entrada del agente.
 
 ### 3.3 Función de reward
 
-Estructura (idéntica en las tres variantes):
+Estructura (idéntica en las cuatro variantes):
 
 ```
 si vuelta_completa:        r = +LAP_BONUS              (terminal, éxito)
-si pasto_en_el_centro:     r = +OFFTRACK_PENALTY       (terminal, salida de pista)
 en otro caso:
     r_avance  = REWARD_PROGRESS_W · Δs_norm · clearance     # progreso×centrado
     r_base    = REWARD_BASE · clearance
@@ -131,10 +145,17 @@ en otro caso:
     r_step    = -REWARD_STEP_COST
     r = r_base + r_avance + r_offset + r_white + r_lost + r_step
 
-terminación adicional:
-    contramano sostenido (wrong_way_steps ≥ N) -> terminal con WRONG_WAY_PENALTY
-    carril perdido (lost_line_steps ≥ N)       -> terminal
+terminación adicional (por contadores, NO instantánea):
+    off-track     (offtrack_steps  ≥ OFFTRACK_GRACE_STEPS) -> terminal con OFFTRACK_PENALTY
+    contramano    (wrong_way_steps ≥ WRONG_WAY_MAX_STEPS)  -> terminal con WRONG_WAY_PENALTY
+    carril perdido (lost_line_steps ≥ LOST_LINE_MAX_STEPS) -> terminal
 ```
+
+> **Off-track con gracia**: el pasto en el centro **no corta el episodio de inmediato**. Se
+> cuentan los pasos **consecutivos** sobre pasto y recién se termina tras
+> `OFFTRACK_GRACE_STEPS` (§3.4), por si es una curva muy cerrada o un desvío momentáneo del
+> que el agente se recupera. Durante la gracia el agente cobra el reward normal (que sobre
+> pasto es ≈0 porque `clearance≈0`); el `OFFTRACK_PENALTY` se aplica solo en el paso terminal.
 
 Donde:
 
@@ -145,39 +166,69 @@ Donde:
 - **`offset`, `white_center`, `green_center`** = features de color de la imagen
   (centroide de la calzada, blanco/verde en el centro).
 
-| Parámetro                           | Valor       | Significado                                    |
-| ----------------------------------- | ----------- | ---------------------------------------------- |
-| `LAP_BONUS`                         | +5.0        | bonus terminal por vuelta                      |
-| `OFFTRACK_PENALTY`                  | −1.0        | penalización terminal por salir a pasto        |
-| `OFFTRACK_GREEN_FRAC`               | 0.4         | umbral de pasto-en-centro para declarar salida |
-| `REWARD_PROGRESS_W`                 | 1.0         | peso del progreso                              |
-| `WRONG_WAY_PENALTY`                 | −1.0 a −1.5 | penalización terminal por contramano           |
-| `WRONG_WAY_MAX_STEPS`               | 12–30       | pasos de retroceso antes de cortar             |
-| `REWARD_OFFSET_W`, `REWARD_WHITE_W` | 0.0         | penas laterales (desactivadas)                 |
-| `REWARD_STEP_COST`                  | 0.0–0.03    | costo por step                                 |
+| Parámetro                           | Valor    | Significado                                    |
+| ----------------------------------- | -------- | ---------------------------------------------- |
+| `LAP_BONUS`                         | +50.0    | bonus terminal por vuelta                      |
+| `OFFTRACK_PENALTY`                  | −1.0     | penalización terminal por salir a pasto        |
+| `OFFTRACK_GREEN_FRAC`               | 0.4      | umbral de pasto-en-centro para declarar salida |
+| `OFFTRACK_GRACE_STEPS`              | 6        | pasos seguidos sobre pasto antes de cortar     |
+| `REWARD_PROGRESS_W`                 | 1.0      | peso del progreso                              |
+| `WRONG_WAY_PENALTY`                 | −1.5     | penalización terminal por contramano           |
+| `WRONG_WAY_MAX_STEPS`               | 12       | pasos de retroceso antes de cortar             |
+| `LOST_LINE_MAX_STEPS`               | 20       | pasos sin ver calzada antes de cortar          |
+| `REWARD_OFFSET_W`, `REWARD_WHITE_W` | 0.0      | penas laterales (desactivadas)                 |
+| `REWARD_STEP_COST`                  | 0.03     | costo por step                                 |
 
 > **Implicación experimental**: como el reward y la terminación son idénticos, cualquier
 > diferencia de desempeño entre variantes es atribuible a **la observación y su
 > extractor**, no a la señal de entrenamiento.
 
+### 3.4 Detección de pista y off-track por color (visión-pura)
+
+El supervisor **no usa ground-truth geométrico para el off-track** (a diferencia de
+DeepRacer real, donde el simulador sabe la pose y la geometría de la pista). Acá el
+off-track se **reconstruye desde la misma imagen de cámara** que ve el agente, clasificando
+píxeles por color en la franja inferior del frame (`helpers/lane_vision.py`, `detect_lane`):
+
+| Clase        | Regla RGB (0–255)                                   | Interpretación         |
+| ------------ | --------------------------------------------------- | ---------------------- |
+| **Borde**    | `R,G,B ≥ LANE_WHITE_MIN` (175)                      | línea blanca del borde |
+| **Pasto**    | `G ≥ 60` **y** `G−R ≥ 25` **y** `B−G ≤ 40`         | fuera de pista (verde) |
+| **Calzada**  | el resto (asfalto gris + línea amarilla pisable)    | superficie manejable   |
+
+De ahí se derivan los escalares del reward: `clearance` (fracción de calzada en la banda
+central), `offset` (centroide de la calzada → hacia dónde dobla), y `green_center`
+(fracción de pasto en el centro). **Off-track** se declara cuando `green_center ≥
+OFFTRACK_GREEN_FRAC` (0.4) sostenido `OFFTRACK_GRACE_STEPS` pasos (§3.3).
+
+**Fondo unificado y calibración.** Todas las pistas usan el verde oficial DeepRacer
+**PMS 3395 C**, que la cámara de Webots renderiza (bajo su iluminación) como un
+verde-azulado `≈[10, 175, 157]`. Ese teal tiene **azul alto**, así que la regla ingenua
+"el verde le gana al azul" (`G−B ≥ 25`) **fallaba** (aquí `G−B = 18`) y el off-track nunca
+disparaba. La regla se recalibró a `B−G ≤ LANE_GREEN_BLUE_SLACK` (40): tolera azul alto
+—captura el teal— pero excluye el azul puro. Los umbrales son configurables por entorno
+(`LANE_*`), y la robot window expone el **RGB crudo** de la banda central (`center_rgb`)
+para recalibrar contra cualquier pista nueva. Esta dependencia del color es una limitación
+consciente (§8): es lo que permite un reward visión-puro sin oráculo geométrico.
+
 ---
 
 ## 4. Variantes (lo que SÍ cambia)
 
-Las tres variantes comparten robot, acción, pistas, reward e hiperparámetros de PPO.
+Las cuatro variantes comparten robot, acción, pistas, reward e hiperparámetros de PPO.
 **Difieren solo en el par (observación, extractor de features de la política).**
 
 ### 4.1 Tabla comparativa
 
-|                       | **Geométrica**                                    | **Visión (1 frame)**                         | **Visión apilada (4 frames)**        |
-| --------------------- | ------------------------------------------------- | -------------------------------------------- | ------------------------------------ |
-| **Rama git**          | `geometrica`                                      | `master`, `--n-stack 1`                      | `master`, `--n-stack 4`              |
-| **Observación**       | Vector `Box(9)` de métricas de imagen             | `Dict{image: 3×84×84, velocity: 2}`          | `Dict{image: 12×84×84, velocity: 8}` |
-| **Origen de la obs**  | Métricas calculadas **localmente** sobre el frame | Píxeles crudos + velocidad                   | 4 frames + 4 velocidades apilados    |
-| **Política SB3**      | `MlpPolicy`                                       | `MultiInputPolicy`                           | `MultiInputPolicy`                   |
-| **Extractor**         | MLP                                               | CNN (NatureCNN) + MLP                        | CNN (NatureCNN) + MLP                |
-| **Info temporal**     | Solo velocidad propia                             | Solo velocidad propia                        | **Sí** (4 frames)                    |
-| **Normalización obs** | VecNormalize sobre todo el vector                 | VecNormalize solo en `velocity`; imagen /255 | ídem                                 |
+|                       | **Geométrica**                                    | **Visión (1 frame)**                         | **Visión apilada (4 frames)**        | **Visión + LSTM**                            |
+| --------------------- | ------------------------------------------------- | -------------------------------------------- | ------------------------------------ | -------------------------------------------- |
+| **Rama git**          | `geometrica`                                      | `master`, `--n-stack 1`                      | `master`, `--n-stack 4`              | `vision_lstm`, `--n-stack 1`                 |
+| **Observación**       | Vector `Box(9)` de métricas de imagen             | `Dict{image: 3×84×84, velocity: 2}`          | `Dict{image: 12×84×84, velocity: 8}` | `Dict{image: 3×84×84, velocity: 2}`          |
+| **Origen de la obs**  | Métricas calculadas **localmente** sobre el frame | Píxeles crudos + velocidad                   | 4 frames + 4 velocidades apilados    | Píxeles crudos + velocidad (1 frame)         |
+| **Política SB3**      | `MlpPolicy`                                       | `MultiInputPolicy`                           | `MultiInputPolicy`                   | `MultiInputLstmPolicy` (`RecurrentPPO`)      |
+| **Extractor**         | MLP                                               | CNN (NatureCNN) + MLP                        | CNN (NatureCNN) + MLP                | CNN (NatureCNN) + MLP + **LSTM** (256)       |
+| **Info temporal**     | Solo velocidad propia                             | Solo velocidad propia                        | **Sí** (4 frames, _stacking_)        | **Sí** (estado oculto **recurrente**)        |
+| **Normalización obs** | VecNormalize sobre todo el vector                 | VecNormalize solo en `velocity`; imagen /255 | ídem                                 | ídem                                         |
 
 ### 4.2 Observación — Geométrica
 
@@ -197,7 +248,7 @@ blanco = borde; verde = pasto) sobre la franja inferior del frame. Los `off_i` t
 _hacia dónde va la pista adelante_ (look-ahead en la imagen), sin waypoints ni geometría
 del circuito.
 
-### 4.3 Observación — Visión y Visión apilada
+### 4.3 Observación — Visión, Visión apilada y Visión + LSTM
 
 Diccionario con dos claves:
 
@@ -209,7 +260,14 @@ En **Visión apilada** se aplica `VecFrameStack(n_stack=4)`: la imagen pasa a `(
 (4 frames en el eje de canales) y la velocidad a `(8,)` (historia temporal). Esto le da
 al agente **percepción de movimiento** (no solo una foto estática).
 
-### 4.4 Acción (idéntica en las tres)
+**Visión + LSTM** usa la **misma observación que Visión de 1 frame** (`Dict{image:3×84×84,
+velocity:2}`, sin stacking): la memoria temporal no viene de la entrada sino de la
+**política recurrente**. El extractor CNN alimenta una capa **LSTM** (estado oculto 256) y
+PPO se entrena con `RecurrentPPO` (sb3-contrib), propagando el estado a lo largo del
+episodio. Es la comparación _stacking vs recurrencia_ como formas alternativas de meter
+temporalidad, a igualdad de todo lo demás.
+
+### 4.4 Acción (idéntica en las cuatro)
 
 Vector continuo de **2 dimensiones** `Box([-1,1]²)`: `[rueda_izq, rueda_der]`.
 
@@ -217,12 +275,14 @@ Vector continuo de **2 dimensiones** `Box([-1,1]²)`: `[rueda_izq, rueda_der]`.
   `[WHEEL_MIN_SPEED, WHEEL_MAX_SPEED] = [1.5, 5.0]` rad/s.
 - **Ambas siempre positivas**: el robot **no puede frenar ni ir en reversa**.
 
-### 4.5 Modelo y entrenamiento (idéntico en las tres)
+### 4.5 Modelo y entrenamiento (idéntico en las cuatro)
 
-- **Algoritmo**: PPO (Stable-Baselines3).
-- **Política**: `MlpPolicy` (geométrica) / `MultiInputPolicy` (visión). El extractor de
-  visión es el `CombinedExtractor` de SB3 (NatureCNN sobre la imagen + MLP sobre la
-  velocidad, concatenados).
+- **Algoritmo**: PPO (Stable-Baselines3); **`RecurrentPPO`** (sb3-contrib) para la variante
+  LSTM, con los **mismos hiperparámetros** de PPO.
+- **Política**: `MlpPolicy` (geométrica) / `MultiInputPolicy` (visión, apilada) /
+  `MultiInputLstmPolicy` (visión + LSTM). El extractor de visión es el `CombinedExtractor`
+  de SB3 (NatureCNN sobre la imagen + MLP sobre la velocidad, concatenados); en la variante
+  LSTM ese vector pasa además por una capa recurrente (estado oculto 256).
 - **VecNormalize**: normaliza la observación (en visión, solo `velocity`; la imagen va
   cruda /255). Opcionalmente normaliza el reward.
 - **Hiperparámetros** (defaults del trainer):
@@ -249,32 +309,47 @@ Vector continuo de **2 dimensiones** `Box([-1,1]²)`: `[rueda_izq, rueda_der]`.
 
 ### 5.1 Comandos de entrenamiento
 
-```bash
-# Visión apilada (4 frames) — rama master
-python -m rl.trainer --n-stack 4 --webots-world worlds/track1.wbt --seed <S>
+**Orquestador (recomendado)** — corre las 4 variantes, cada una en su rama, entrenando las
+N seeds y evaluando cada una, sin cambiar de rama a mano:
 
-# Visión (1 frame) — rama master
-python -m rl.trainer --n-stack 1 --webots-world worlds/track1.wbt --seed <S>
+```bash
+python run_all_experiments.py --seeds 0 1 2 3 4 --total-timesteps 1000000 \
+    --n-envs 4 --episodes 10
+# subconjunto: ... --only geometrica vision_lstm
+```
+
+Internamente, por variante hace `git checkout <rama>` y `python -m rl.run_experiment`
+(train + eval de cada seed). Equivalentes manuales:
+
+```bash
+# Visión (1 frame) / Visión apilada (4) — rama master
+python -m rl.trainer --n-stack 1 --seed <S>       # 1 frame
+python -m rl.trainer --n-stack 4 --seed <S>       # apilada
 
 # Geométrica — rama geometrica
-git checkout geometrica
-python -m rl.trainer --n-stack 1 --webots-world worlds/track1.wbt --seed <S>
+git checkout geometrica && python -m rl.trainer --n-stack 1 --seed <S>
+
+# Visión + LSTM — rama vision_lstm (RecurrentPPO)
+git checkout vision_lstm && python -m rl.trainer --n-stack 1 --seed <S>
 ```
 
 ### 5.2 Seeds y agregación
 
-- **N seeds** por variante (sugerido N ≥ 5): `--seed 0..N-1`.
-- Mismo `--total-timesteps` para las tres.
+- **N seeds** por variante (N = 5): `--seeds 0 1 2 3 4`.
+- Mismo `--total-timesteps` para las cuatro.
 - Se reportan **media ± desvío** (o IQM) sobre las seeds.
-- **Este informe**: 5 seeds (0–4), **500k timesteps**, `n_envs=4`. Agregación con
-  `analysis/aggregate_eval.py`.
+- **Corrida final**: 5 seeds (0–4), **1M timesteps**, `n_envs=4`, 4 variantes. Agregación con
+  `analysis/aggregate_eval.py` (usa el campo `variant` de la metadata de cada run).
+- **Piloto (§6)**: 5 seeds, **500k timesteps**, 3 variantes (sin LSTM) — resultados
+  preliminares, a reemplazar.
 
 ### 5.3 Evaluación
 
-Sobre pistas _held-out_ (`track4`, `track5`), con el modelo final de cada seed:
+Sobre pistas _held-out_ (`track9`, `track10`, solo spawn, sin gates), con el modelo final
+de cada seed:
 
 ```bash
-python -m rl.evaluate --model <run_dir>      # todas las pistas de eval
+python -m rl.evaluate --model <run_dir> --episodes 10   # N episodios fijos por track
 ```
 
 La evaluación **guarda las métricas** en `<run_dir>/eval_results_<timestamp>.json`
@@ -312,9 +387,14 @@ _cuán bien generaliza_.
 
 ## 6. Resultados
 
-> **Datos**: 5 seeds × 3 variantes (15 corridas), **500k timesteps** c/u, `n_envs=4`.
-> Evaluación sobre pistas **held-out** (`track4`, `track5`), **10 episodios/track** (modo
-> tasa de éxito). Agregación: `analysis/aggregate_eval.py` → `analysis/results_summary.*`.
+> ⚠️ **PRELIMINARES (piloto).** Estos números son de un piloto de **500k timesteps, 3
+> variantes** (sin LSTM) sobre el set de pistas viejo (train `track1–3`, eval `track4–5`).
+> Se **reemplazan** por la corrida final (**1M × 5 seeds × 4 variantes**, eval `track9/10`)
+> en curso. Se dejan como referencia de la tendencia y para validar el pipeline de análisis.
+>
+> **Datos (piloto)**: 5 seeds × 3 variantes (15 corridas), **500k timesteps** c/u,
+> `n_envs=4`. Evaluación sobre **held-out** (`track4`, `track5`), **10 episodios/track**.
+> Agregación: `analysis/aggregate_eval.py` → `analysis/results_summary.*`.
 
 ### 6.1 Curvas de aprendizaje — **[TRAIN]**
 
@@ -393,6 +473,10 @@ variantes de visión son **estadísticamente indistinguibles** (p=1.0): ambas fa
 
 ## 7. Discusión
 
+> _Refleja el **piloto** (§6): 3 variantes, 500k. La variante **LSTM** y la corrida de 1M×5
+> seeds se incorporan cuando terminen; la hipótesis para el LSTM es que **tampoco** rescata a
+> la visión (la temporalidad no es el cuello de botella acá, ver punto 2)._
+
 Los resultados son **fuertes y, en parte, contra-intuitivos**:
 
 1. **Las features a mano (geométrica) dominan ampliamente.** 60% de lap rate en pistas
@@ -433,8 +517,14 @@ además, **lo poco que aprende no transfiere** (apariencia específica del train
   mitiga parcialmente (da sentido de movimiento) pero no garantiza orientación global.
 - **Escala de las pistas**: diseñadas a mano (Inkscape); curvas muy cerradas pueden
   exceder el radio de giro efectivo del robot diferencial.
-- **Reward dependiente de color**: la detección de pista asume el esquema de color
-  DeepRacer (blanco/amarillo/verde). Cambios de iluminación/textura podrían degradarla.
+- **Reward dependiente de color** (§3.4): al reconstruir el off-track desde la imagen (sin
+  oráculo geométrico), la detección asume el esquema de color DeepRacer y es **sensible al
+  render**. Caso concreto: al unificar el fondo al verde oficial PMS 3395 C, la cámara lo
+  renderiza como un teal `≈[10,175,157]` con azul alto; la regla original `G−B ≥ 25`
+  **dejaba de detectarlo** (aquí `G−B=18`) y el off-track no disparaba, hasta recalibrar a
+  `B−G ≤ 40`. Es una fragilidad estructural del enfoque visión-puro: cada cambio de
+  paleta/iluminación exige revalidar los umbrales (mitigado con el `center_rgb` de la robot
+  window). DeepRacer real lo evita usando geometría ground-truth para el off-track.
 
 ---
 
@@ -469,13 +559,18 @@ temporal.
 
 ## Apéndice A — Reproducibilidad
 
-- Reward y terminación: `controllers/supervisor_controller/supervisor_controller.py`
-  (`_compute_reward_breakdown`, `_handle_step_env_request`).
-- Features geométricos: `helpers/geom_obs.py`, `helpers/lane_vision.py`
+- Reward y terminación (incl. gracia de off-track): `controllers/supervisor_controller/
+  supervisor_controller.py` (`_compute_reward_breakdown`, `_handle_step_env_request`).
+- Detección de pista/off-track por color: `helpers/lane_vision.py` (`_edge_masks`,
+  `detect_lane`); umbrales configurables en `.env` (`LANE_*`, `OFFTRACK_*`).
+- Features geométricos (rama `geometrica`): `helpers/geom_obs.py`, `helpers/lane_vision.py`
   (`detect_lane`, `road_band_offsets`).
 - Observación de visión: `rl/env.py`, `helpers/image_obs.py`.
 - Progreso por gates: `helpers/track_progress.py` (`build_loop`, `project_s`,
   `signed_delta`).
-- Trainer / hiperparámetros: `rl/trainer.py`.
-- Evaluación: `rl/evaluate.py`.
-- Pistas y spawns/gates: `worlds/`, `spawns.json`.
+- Trainer / hiperparámetros: `rl/trainer.py` (rama `vision_lstm`: `RecurrentPPO` +
+  `MultiInputLstmPolicy`).
+- Orquestación multi-variante y por-seed: `run_all_experiments.py`, `rl/run_experiment.py`.
+- Evaluación: `rl/evaluate.py` (modo N episodios fijos, `--episodes`).
+- Agregación y curvas: `analysis/aggregate_eval.py`, `analysis/parse_tensorboard.py`.
+- Pistas y spawns/gates: `worlds/`, `spawns.json` (train `track1–8`, eval `track9–10`).
