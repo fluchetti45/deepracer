@@ -229,6 +229,9 @@ class SupervisorController:
         self.reset_rng = np.random.default_rng()
         # Mapa track->spawns (spawns.json). None => textura/pose por defecto del .wbt.
         self.track_spawns = self._load_track_spawns()
+        # Catalogo para el selector de pista de la UI: TODAS las worlds/*.png (incl. eval)
+        # + pose de spawn por textura (para teleportar al cambiar de pista a mano).
+        self.ui_track_list, self.ui_track_poses = self._load_ui_track_catalog()
         # Track del episodio en curso (para metricas/telemetria). None = default del .wbt.
         self.current_track_texture = None
         # Estado de progreso por gates del episodio en curso (None = track sin gates).
@@ -470,10 +473,15 @@ class SupervisorController:
                 "center_clearance": round(features.get("center_clearance", 0.0), 4),
                 "green_center": round(features.get("center_green", 0.0), 4),
                 "white_center": round(features.get("center_white", 0.0), 4),
+                # RGB crudo de la banda central (para calibrar el umbral de off-track).
+                "center_rgb": features.get("center_rgb"),
                 "line_visible": features.get("line_visible", False),
             },
             "reward_breakdown": self.last_reward_breakdown,
             "robot_pos": [round(robot_pos[0], 4), round(robot_pos[1], 4)],
+            # Selector de pista (UI): catalogo + pista actual.
+            "available_tracks": self.ui_track_list,
+            "current_track": self.current_track_texture,
         }
         self._send_ui_message(payload)
 
@@ -524,6 +532,8 @@ class SupervisorController:
                     )
                 elif message_type == "configure_policy":
                     self._handle_policy_configuration(message)
+                elif message_type == "set_track":
+                    self._handle_set_track(message)
                 elif message_type == "reset_pose":
                     self._handle_manual_reset()
                     self._send_ui_state("Robot reseteado a la pose inicial.")
@@ -544,6 +554,57 @@ class SupervisorController:
         self.last_action_label = label
         self._capture_debug_frame(mode=self.debug_frame_mode)
         self._send_ui_state(f"Accion manual enviada: {label}")
+
+    def _load_ui_track_catalog(self):
+        """
+        Catalogo para el selector de pista de la UI. Devuelve (texturas, poses):
+          - texturas: lista de todas las worlds/*.png (incl. las eval-only), para elegir.
+          - poses: {textura: (translation, rotation)} del primer spawn (de spawns.json),
+                   para teleportar el robot al cambiar de pista a mano. Best-effort.
+        """
+        worlds_dir = os.path.join(PROJECT_ROOT, "worlds")
+        try:
+            textures = sorted(f for f in os.listdir(worlds_dir) if f.lower().endswith(".png"))
+        except OSError:
+            textures = []
+        poses = {}
+        path = os.environ.get("SPAWNS_JSON") or os.path.join(PROJECT_ROOT, "spawns.json")
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            for track in (data.get("tracks") or []):
+                texture = track.get("texture") if isinstance(track, dict) else None
+                spawns = [ss for ss in track.get("spawns", []) if self._valid_spawn(ss)]
+                if isinstance(texture, str) and spawns:
+                    poses[texture] = (list(spawns[0]["translation"]),
+                                      list(spawns[0]["rotation"]))
+        except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+            pass
+        return textures, poses
+
+    def _handle_set_track(self, message):
+        """
+        Cambia la textura del piso a la pista elegida desde la UI (para probar/calibrar a
+        mano). Si se conoce un spawn de esa pista, teleporta el robot ahi; si no, deja el
+        robot donde esta. Avanza unos pasos para que la nueva textura ya se renderice.
+        """
+        texture = message.get("texture")
+        if not texture or (self.ui_track_list and texture not in self.ui_track_list):
+            self._send_ui_state(f"Track invalido: {texture}")
+            return
+        if self.floor_texture_url_field is None:
+            self._send_ui_state("Este mundo no tiene DEF FLOOR_TEX; no se puede cambiar la pista.")
+            return
+        self.floor_texture_url_field.setMFString(0, texture)
+        self.current_track_texture = texture
+        pose = self.ui_track_poses.get(texture)
+        if pose is not None:
+            translation, rotation = pose
+            self.current_spawn = (translation, rotation)
+            self._reset_robot_pose(translation=translation, rotation=rotation)
+        self._advance_simulation(RESET_SETTLE_STEPS)
+        self._refresh_robot_observation()
+        self._send_ui_state(f"Pista cambiada a {texture}.")
 
     def _handle_manual_reset(self):
         """
