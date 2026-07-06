@@ -44,9 +44,11 @@ WALL_TEXTURE_DIR = read_env_value("WALL_TEXTURE_DIR", "worlds/wall_textures", st
 # Skyboxes que trae Webots por defecto (campo `texture` de TexturedBackground); se rotan por
 # episodio para que el fondo lejano (montañas/edificios) tampoco sea una señal fija.
 SKYBOX_TEXTURES = [
+    # Solo los skyboxes HDR VALIDOS en Webots R2025a: los non-HDR estan deprecados y
+    # disparan un JS error en TexturedBackground.proto en cada reset. Estos 12 no warnean.
     "mountains", "noon_cloudy_countryside", "noon_park_empty", "factory",
-    "entrance_hall", "empty_office", "dawn_cloudy_empty", "morning_cloudy_empty",
-    "noon_building_overlook", "twilight_cloudy_empty", "dusk", "mars",
+    "entrance_hall", "empty_office", "noon_building_overcast", "music_hall",
+    "stadium", "stadium_dry", "dusk", "mars",
 ]
 
 # ----------------------------------------------------------------------------
