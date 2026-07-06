@@ -217,6 +217,29 @@ function populateTrackSelector(tracks, current) {
   updateText("current-track", current ?? "N/A");
 }
 
+let wallSelectPopulated = false;
+let skyboxSelectPopulated = false;
+
+// Popula un <select> UNA vez con las opciones dadas y refleja la seleccion actual.
+function populateSelect(selectId, currentLabelId, options, current, alreadyPopulated) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return alreadyPopulated;
+  let populated = alreadyPopulated;
+  if (Array.isArray(options) && options.length && !alreadyPopulated) {
+    sel.replaceChildren();
+    options.forEach((o) => {
+      const opt = document.createElement("option");
+      opt.value = o;
+      opt.textContent = o;
+      sel.appendChild(opt);
+    });
+    populated = true;
+  }
+  if (current) sel.value = current;
+  updateText(currentLabelId, current ?? "N/A");
+  return populated;
+}
+
 function normalizeSelectedPath(fileInput) {
   const selectedFile = fileInput?.files?.[0];
   if (!selectedFile) return "";
@@ -283,6 +306,16 @@ function wireButtons() {
   document.getElementById("track-select").addEventListener("change", (event) => {
     const texture = event.target.value;
     if (texture) sendMessage({ type: "set_track", texture });
+  });
+
+  document.getElementById("wall-select").addEventListener("change", (event) => {
+    const texture = event.target.value;
+    if (texture) sendMessage({ type: "set_wall_texture", texture });
+  });
+
+  document.getElementById("skybox-select").addEventListener("change", (event) => {
+    const skybox = event.target.value;
+    if (skybox) sendMessage({ type: "set_skybox", skybox });
   });
 
   document.getElementById("request-policy-debug").addEventListener("click", () => {
@@ -389,6 +422,15 @@ window.onload = () => {
     // Estado de carril (vision-pura) + selector de pista.
     renderLane(data.lane ?? null);
     populateTrackSelector(data.available_tracks ?? null, data.current_track ?? null);
+    // Selectores de fondo (pared / skybox).
+    wallSelectPopulated = populateSelect(
+      "wall-select", "current-wall",
+      data.available_wall_textures ?? null, data.current_wall_texture ?? null,
+      wallSelectPopulated);
+    skyboxSelectPopulated = populateSelect(
+      "skybox-select", "current-skybox",
+      data.available_skyboxes ?? null, data.current_skybox ?? null,
+      skyboxSelectPopulated);
 
     const snapshot = data.policy_debug_snapshot ?? null;
     updateText("policy-debug-summary", formatPolicyDebugSnapshot(snapshot));

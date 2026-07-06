@@ -3,7 +3,6 @@
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
-EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/appearances/protos/RedBricks.proto"
 
 WorldInfo {
 }
@@ -11,7 +10,8 @@ Viewpoint {
   orientation -0.5035148678562779 0.20534107603998084 0.8392304929746166 2.482089341403223
   position 3.408541537051303 -2.3493106131773627 9.007621582677112
 }
-TexturedBackground {
+DEF SKYBOX TexturedBackground {
+  texture "mountains"
 }
 TexturedBackgroundLight {
 }
@@ -30,7 +30,17 @@ DEF ARENA RectangleArena {
       scale 0.1 0.1
     }
   }
-  wallAppearance RedBricks {
+  wallAppearance DEF WALL_APP PBRAppearance {
+    baseColor 1 1 1
+    roughness 1
+    metalness 0
+    baseColorMap DEF WALL_TEX ImageTexture {
+      url [
+        "wall_textures/wall_00.png"
+      ]
+      repeatS TRUE
+      repeatT TRUE
+    }
   }
 }
 Robot {
