@@ -64,7 +64,8 @@ def main():
     print("\n" + "=" * 72)
     print("Escrito en", args.out_dir + "/:")
     for f in ("results_summary.json", "results_summary.md", "curves.json",
-              "sample_efficiency.json", "fig_reward.png", "fig_lap_rate.png"):
+              "sample_efficiency.json", "fig_reward.png", "fig_lap_rate.png",
+              "fig_eval_lap_rate.png"):
         print("  -", f)
     print("=" * 72)
 

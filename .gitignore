@@ -31,6 +31,8 @@ analysis/results_summary.md
 analysis/curves.json
 analysis/sample_efficiency.json
 analysis/fig_*.png
+analysis/cmp_*.png
+analysis/frames/
 
 # ---- Webots (archivos autogenerados por usuario/proyecto) ----
 worlds/.*.wbproj

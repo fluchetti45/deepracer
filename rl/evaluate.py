@@ -144,7 +144,53 @@ def parse_args():
     parser.add_argument(
         "--device", default="cpu", help="Dispositivo de PyTorch para la inferencia."
     )
+    # --- Volcado de frames de la camara (para analysis/cnn_activations) ---
+    parser.add_argument(
+        "--dump-frames", type=int, default=0,
+        help="Guardar N frames REALES de la camara por track (0 = off). Para visualizar "
+             "activaciones de la CNN con inputs de la distribucion de entrenamiento.",
+    )
+    parser.add_argument(
+        "--dump-every", type=int, default=15,
+        help="Steps entre frames guardados (stride): evita volcar frames casi identicos "
+             "seguidos y da diversidad (curvas, rectas, off-track).",
+    )
+    parser.add_argument(
+        "--dump-dir", default="analysis/frames",
+        help="Carpeta destino de los frames volcados.",
+    )
     return parser.parse_args()
+
+
+def _extract_latest_rgb(obs):
+    """
+    Frame RGB HWC uint8 mas RECIENTE desde la obs del VecEnv. Con VecFrameStack la imagen
+    viene apilada en el eje de canales (newest al final) -> tomo los ultimos 3 canales.
+    La imagen no la normaliza VecNormalize (solo velocity), asi que ya es uint8 [0,255].
+    """
+    img = obs["image"] if isinstance(obs, dict) else obs
+    arr = np.asarray(img)[0]                 # (C, H, W)  (n_envs=1)
+    arr = arr[-3:]                           # frame mas nuevo = ultimos 3 canales
+    arr = np.transpose(arr, (1, 2, 0))       # HWC
+    if arr.dtype != np.uint8:                # defensivo por si viniera float
+        top = float(arr.max()) if arr.size else 0.0
+        arr = arr * 255.0 if top <= 1.0 else arr
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+    return arr
+
+
+def _save_frame(obs, out_dir, texture, idx):
+    """Guarda el frame mas reciente como PNG. Devuelve la ruta (o None si falla)."""
+    try:
+        from PIL import Image
+        os.makedirs(out_dir, exist_ok=True)
+        stem = os.path.splitext(texture)[0]
+        path = os.path.join(out_dir, f"frame_{stem}_{idx:03d}.png")
+        Image.fromarray(_extract_latest_rgb(obs)).save(path)
+        return path
+    except Exception as exc:  # nunca romper la eval por el dump
+        print(f"  [dump] no pude guardar frame: {exc}")
+        return None
 
 
 def resolve_artifacts(model_arg):
@@ -288,6 +334,8 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
         wall_start = time.perf_counter()
         laps_done = 0
         fixed_n = args.episodes  # None => modo "hasta --laps vueltas"
+        step_global = 0           # steps totales del track (para el stride del dump)
+        dumped = 0                # frames volcados en este track
 
         while True:
             # Corte: N episodios fijos (modo tasa de exito) o hasta juntar --laps vueltas.
@@ -296,6 +344,13 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
                     break
             elif laps_done >= args.laps or episode >= max_episodes:
                 break
+            # Volcado de frames con STRIDE: 1 cada --dump-every steps, hasta --dump-frames.
+            # Se toma el frame que la policy VE ahora (obs actual) -> input real de la CNN.
+            if args.dump_frames and dumped < args.dump_frames \
+                    and step_global % max(1, args.dump_every) == 0:
+                if _save_frame(obs, args.dump_dir, texture, dumped):
+                    dumped += 1
+            step_global += 1
             action, _ = model.predict(obs, deterministic=deterministic)
             obs, _rewards, dones, infos = vec_env.step(action)
             step_in_episode += 1
@@ -327,6 +382,10 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
             step_in_episode = 0
             ep_reward = 0.0
             wall_start = time.perf_counter()
+
+        if args.dump_frames:
+            print(f"  [dump] {dumped} frame(s) guardados en {args.dump_dir}/ "
+                  f"(1 cada {args.dump_every} steps)")
     finally:
         if vec_env is not None:
             vec_env.close()

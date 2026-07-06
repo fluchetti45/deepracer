@@ -51,10 +51,15 @@ def load_runs(run_dirs):
         ev = json.load(open(evals[-1], encoding="utf-8"))
         device = meta.get("actual_device", "cpu")
         n_stack = hp.get("n_stack", 1)
+        variant = meta.get("variant") or classify_variant(device, n_stack)
+        # Regimen de entrenamiento: explicito en metadata, o derivado (los vision_distill*
+        # son supervisados; el resto se entreno con el simulador/RL).
+        regime = meta.get("training_regime") or (
+            "distill" if variant.startswith("vision_distill") else "rl")
         runs.append({
             "run_id": os.path.basename(run_dir.rstrip("/\\")),
-            # Preferir el campo explicito 'variant' (metadata nueva); si no esta, derivar.
-            "variant": meta.get("variant") or classify_variant(device, n_stack),
+            "variant": variant,
+            "training_regime": regime,
             "device": device,
             "n_stack": int(n_stack),
             "seed": int(hp.get("seed", -1)),
@@ -164,6 +169,7 @@ def aggregate(run_dirs):
         }
         summary["variants"][v] = {
             "label": VARIANT_LABEL[v],
+            "training_regime": group[0].get("training_regime", "rl"),
             "n_seeds": len(group),
             "seeds": [r["seed"] for r in group],
             "lap_rate": dict(zip(("mean", "std"), mean_std(lap))),
@@ -212,14 +218,15 @@ def to_markdown(summary):
 
     # Tabla global.
     lines.append("## Desempeño global (promedio de los tracks held-out)\n")
-    lines.append("| Variante | Lap rate (%) | Reward/ep | Off-track (%) | Tiempo vuelta (s) |")
-    lines.append("|---|---|---|---|---|")
+    lines.append("| Variante | Régimen | Lap rate (%) | Reward/ep | Off-track (%) | Tiempo vuelta (s) |")
+    lines.append("|---|---|---|---|---|---|")
     for v in VARIANT_ORDER:
         d = summary["variants"].get(v)
         if not d:
             continue
+        regime = "destilado" if d.get("training_regime") == "distill" else "RL (sim)"
         lines.append(
-            f"| {d['label']} | {pct(d['lap_rate']['mean'], d['lap_rate']['std'])} "
+            f"| {d['label']} | {regime} | {pct(d['lap_rate']['mean'], d['lap_rate']['std'])} "
             f"| {num(d['reward']['mean'], d['reward']['std'])} "
             f"| {pct(d['offtrack_rate']['mean'], d['offtrack_rate']['std'])} "
             f"| {num(d['lap_time_s']['mean'], d['lap_time_s']['std'])} |"
@@ -255,8 +262,50 @@ def to_markdown(summary):
     return "\n".join(lines)
 
 
+def plot_eval_bars(summary, out_path):
+    """
+    Barras de lap rate held-out por variante (eval), con ±desvio. Incluye TODAS las variantes
+    —incluidas las destiladas, que NO tienen curva de TensorBoard— y las distingue por color +
+    hatch/etiqueta segun el regimen (RL de simulador vs destilado). Este es el chart que compara
+    geometrico, RL de vision y destilados en el mismo grafico.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    variants = [v for v in VARIANT_ORDER if v in summary["variants"]]
+    if not variants:
+        return
+    d = [summary["variants"][v] for v in variants]
+    # lap_rate viene en fraccion [0,1]; el chart va en porcentaje.
+    means = [x["lap_rate"]["mean"] * 100 for x in d]
+    stds = [x["lap_rate"]["std"] * 100 for x in d]
+    regimes = [x.get("training_regime", "rl") for x in d]
+    xt = [f"{x['label']}\n({'destilado' if r == 'distill' else 'RL sim'}, n={x['n_seeds']})"
+          for x, r in zip(d, regimes)]
+    colors = [plt.cm.tab10(i % 10) for i in range(len(variants))]
+
+    fig, ax = plt.subplots(figsize=(max(7.0, 1.7 * len(variants)), 4.6))
+    bars = ax.bar(range(len(variants)), means, yerr=stds, capsize=4, color=colors,
+                  edgecolor="black", linewidth=0.6)
+    for b, r in zip(bars, regimes):
+        if r == "distill":
+            b.set_hatch("//")   # los destilados con hatch, para diferenciarlos de un vistazo
+    ax.set_xticks(range(len(variants)))
+    ax.set_xticklabels(xt, fontsize=8)
+    ax.set_ylabel("Lap rate held-out (%)")
+    ax.set_ylim(0, 108)
+    ax.set_title("Lap rate en held-out por variante (eval)  ·  hatch = destilado")
+    for i, (m, s) in enumerate(zip(means, stds)):
+        ax.text(i, min(m + s + 2, 104), f"{m:.0f}%", ha="center", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=140)
+    plt.close(fig)
+    print("Chart de eval escrito en", out_path)
+
+
 def run(run_dirs, out_dir=OUT_DIR):
-    """Agrega los run_dirs dados y escribe results_summary.{json,md}. Devuelve (summary, md)."""
+    """Agrega los run_dirs dados y escribe results_summary.{json,md} + fig_eval_lap_rate.png."""
     os.makedirs(out_dir, exist_ok=True)
     summary = aggregate(run_dirs)
     json_path = os.path.join(out_dir, "results_summary.json")
@@ -264,6 +313,7 @@ def run(run_dirs, out_dir=OUT_DIR):
     json.dump(summary, open(json_path, "w", encoding="utf-8"), indent=2, ensure_ascii=True)
     md = to_markdown(summary)
     open(md_path, "w", encoding="utf-8").write(md)
+    plot_eval_bars(summary, os.path.join(out_dir, "fig_eval_lap_rate.png"))
     return summary, md
 
 
