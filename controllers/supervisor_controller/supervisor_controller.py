@@ -32,6 +32,22 @@ DOMAIN_RANDOMIZATION_MAX_ROTATION = math.radians(
 # Perturbacion maxima de traslacion en x e y (en METROS, +/-).
 DOMAIN_RANDOMIZATION_MAX_TRANSLATION = read_env_value("DOMAIN_RANDOMIZATION_MAX_TRANSLATION", 0.02)
 
+# Domain randomization VISUAL del fondo: randomiza el color de las PAREDES de la arena por
+# episodio, para que la CNN NO se sesgue a la textura/color del fondo (ver analysis/
+# cnn_activations: la vision-RL fijaba la atencion en el muro/horizonte). Flag PROPIO: el
+# eval lo apaga para una corrida determinista.
+BACKGROUND_RANDOMIZATION_ENABLED = bool(read_env_value("BACKGROUND_RANDOMIZATION_ENABLED", 1, int))
+BACKGROUND_RANDOMIZATION_PROBABILITY = read_env_value("BACKGROUND_RANDOMIZATION_PROBABILITY", 0.8)
+# Carpeta con el pool de texturas de pared (PNGs) que se swapean por episodio (como el piso).
+WALL_TEXTURE_DIR = read_env_value("WALL_TEXTURE_DIR", "worlds/wall_textures", str)
+# Skyboxes que trae Webots por defecto (campo `texture` de TexturedBackground); se rotan por
+# episodio para que el fondo lejano (montañas/edificios) tampoco sea una señal fija.
+SKYBOX_TEXTURES = [
+    "mountains", "noon_cloudy_countryside", "noon_park_empty", "factory",
+    "entrance_hall", "empty_office", "dawn_cloudy_empty", "morning_cloudy_empty",
+    "noon_building_overlook", "twilight_cloudy_empty", "dusk", "mars",
+]
+
 # ----------------------------------------------------------------------------
 # Constantes por defecto.
 # La estructura viene de otro proyecto; estos valores son defaults razonables
@@ -158,6 +174,23 @@ class SupervisorController:
         self.floor_texture_url_field = (
             self.floor_texture_node.getField("url") if self.floor_texture_node else None
         )
+        # Domain randomization VISUAL del fondo (best-effort; None si el .wbt no tiene el DEF):
+        #  - WALL_TEX: textura de la pared, se swapea desde un pool por episodio (como el piso).
+        #  - WALL_APP.baseColor: tinte suave sobre la textura, para mas variedad.
+        #  - SKYBOX.texture: rota entre los skyboxes que trae Webots.
+        wall_app_node = self.supervisor.getFromDef("WALL_APP")
+        self.wall_basecolor_field = (
+            wall_app_node.getField("baseColor") if wall_app_node else None
+        )
+        wall_tex_node = self.supervisor.getFromDef("WALL_TEX")
+        self.wall_texture_url_field = (
+            wall_tex_node.getField("url") if wall_tex_node else None
+        )
+        skybox_node = self.supervisor.getFromDef("SKYBOX")
+        self.skybox_texture_field = (
+            skybox_node.getField("texture") if skybox_node else None
+        )
+        self.wall_texture_pool = self._load_wall_texture_pool()
         # DEFINICION DEL ROBOT E-PUCK
         self.epuck_robot = self.supervisor.getFromDef("EPUCK")
         self.epuck_translation_field = self.epuck_robot.getField("translation")
@@ -186,6 +219,10 @@ class SupervisorController:
         self.ui_track_list, self.ui_track_poses = self._load_ui_track_catalog()
         # Track del episodio en curso (para metricas/telemetria). None = default del .wbt.
         self.current_track_texture = None
+        # Seleccion actual de fondo para la UI (dropdowns de pared / skybox). Arrancan en el
+        # default del .wbt (primer item del pool y primer skybox de la lista).
+        self.current_wall_texture = self.wall_texture_pool[0] if self.wall_texture_pool else None
+        self.current_skybox = SKYBOX_TEXTURES[0] if SKYBOX_TEXTURES else None
         # Estado de progreso por gates del episodio en curso (None = track sin gates).
         self.current_loop = None
         self.progress_s = 0.0
@@ -321,6 +358,43 @@ class SupervisorController:
         self.epuck_rotation_field.setSFRotation(perturbed_rotation)
         self.epuck_robot.resetPhysics()
 
+    def _load_wall_texture_pool(self):
+        """URLs (relativas al world) de las texturas de pared en WALL_TEXTURE_DIR. [] si no hay."""
+        wall_dir = os.path.join(PROJECT_ROOT, WALL_TEXTURE_DIR)
+        worlds_dir = os.path.join(PROJECT_ROOT, "worlds")
+        try:
+            files = sorted(f for f in os.listdir(wall_dir) if f.lower().endswith(".png"))
+        except OSError:
+            return []
+        return [os.path.relpath(os.path.join(wall_dir, f), worlds_dir).replace("\\", "/")
+                for f in files]
+
+    def _randomize_background(self):
+        """
+        Domain randomization VISUAL del fondo por episodio (con probabilidad): swapea la
+        TEXTURA de la pared desde el pool (como el piso), rota el SKYBOX entre los que trae
+        Webots, y aplica un tinte suave al color de la pared. Si el fondo es ruido respecto a
+        la accion correcta, la CNN no puede usarlo de atajo -> obligada a mirar la calzada.
+        Best-effort (cada pieza guardada por su handle). El eval apaga BACKGROUND_RANDOMIZATION_
+        ENABLED (corrida determinista).
+        """
+        if not BACKGROUND_RANDOMIZATION_ENABLED:
+            return
+        if self.reset_rng.random() > BACKGROUND_RANDOMIZATION_PROBABILITY:
+            return
+        # 1) Textura de pared desde el pool.
+        if self.wall_texture_url_field is not None and self.wall_texture_pool:
+            tex = self.wall_texture_pool[int(self.reset_rng.integers(len(self.wall_texture_pool)))]
+            self.wall_texture_url_field.setMFString(0, tex)
+        # 2) Tinte suave sobre la textura (no oscurecer de mas: [0.55, 1.0]).
+        if self.wall_basecolor_field is not None:
+            self.wall_basecolor_field.setSFColor(
+                [float(self.reset_rng.uniform(0.55, 1.0)) for _ in range(3)])
+        # 3) Skybox de Webots (fondo lejano: montañas/edificios/etc.).
+        if self.skybox_texture_field is not None:
+            sky = SKYBOX_TEXTURES[int(self.reset_rng.integers(len(SKYBOX_TEXTURES)))]
+            self.skybox_texture_field.setSFString(sky)
+
     def _configure_episode_start(self, seed=None, options=None):
         """
         Configura el inicio de un episodio.
@@ -434,6 +508,11 @@ class SupervisorController:
             # Selector de pista (UI): catalogo + pista actual.
             "available_tracks": self.ui_track_list,
             "current_track": self.current_track_texture,
+            # Selectores de fondo (UI): pool de texturas de pared + skyboxes de Webots.
+            "available_wall_textures": self.wall_texture_pool,
+            "current_wall_texture": self.current_wall_texture,
+            "available_skyboxes": SKYBOX_TEXTURES,
+            "current_skybox": self.current_skybox,
         }
         self._send_ui_message(payload)
 
@@ -486,6 +565,10 @@ class SupervisorController:
                     self._handle_policy_configuration(message)
                 elif message_type == "set_track":
                     self._handle_set_track(message)
+                elif message_type == "set_wall_texture":
+                    self._handle_set_wall_texture(message)
+                elif message_type == "set_skybox":
+                    self._handle_set_skybox(message)
                 elif message_type == "reset_pose":
                     self._handle_manual_reset()
                     self._send_ui_state("Robot reseteado a la pose inicial.")
@@ -557,6 +640,36 @@ class SupervisorController:
         self._advance_simulation(RESET_SETTLE_STEPS)
         self._refresh_robot_observation()
         self._send_ui_state(f"Pista cambiada a {texture}.")
+
+    def _handle_set_wall_texture(self, message):
+        """Cambia la textura de la PARED (DEF WALL_TEX) a la elegida desde la UI."""
+        texture = message.get("texture")
+        if not texture or (self.wall_texture_pool and texture not in self.wall_texture_pool):
+            self._send_ui_state(f"Textura de pared invalida: {texture}")
+            return
+        if self.wall_texture_url_field is None:
+            self._send_ui_state("Este mundo no tiene DEF WALL_TEX; no se puede cambiar la pared.")
+            return
+        self.wall_texture_url_field.setMFString(0, texture)
+        self.current_wall_texture = texture
+        self._advance_simulation(RESET_SETTLE_STEPS)
+        self._refresh_robot_observation()
+        self._send_ui_state(f"Textura de pared cambiada a {texture}.")
+
+    def _handle_set_skybox(self, message):
+        """Cambia el SKYBOX (DEF SKYBOX.texture) al elegido desde la UI."""
+        skybox = message.get("skybox")
+        if not skybox or (SKYBOX_TEXTURES and skybox not in SKYBOX_TEXTURES):
+            self._send_ui_state(f"Skybox invalido: {skybox}")
+            return
+        if self.skybox_texture_field is None:
+            self._send_ui_state("Este mundo no tiene DEF SKYBOX; no se puede cambiar el fondo.")
+            return
+        self.skybox_texture_field.setSFString(skybox)
+        self.current_skybox = skybox
+        self._advance_simulation(RESET_SETTLE_STEPS)
+        self._refresh_robot_observation()
+        self._send_ui_state(f"Skybox cambiado a {skybox}.")
 
     def _handle_manual_reset(self):
         """
@@ -957,6 +1070,8 @@ class SupervisorController:
         self._reset_robot_pose(translation=translation, rotation=rotation)
         # Jitter de pose SOBRE el spawn elegido (si DR esta activo).
         self._apply_domain_randomization()
+        # DR visual del fondo: color de pared aleatorio por episodio (si esta activo).
+        self._randomize_background()
         self._advance_simulation(RESET_SETTLE_STEPS)
         self._refresh_robot_observation()
         self.episode_id += 1
