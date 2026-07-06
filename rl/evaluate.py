@@ -540,6 +540,7 @@ def run_evaluation(args):
 
     # Config comun para todos los tracks (heredada por cada Webots que se lanza).
     os.environ["DOMAIN_RANDOMIZATION_ENABLED"] = "0"
+    os.environ["BACKGROUND_RANDOMIZATION_ENABLED"] = "0"  # eval determinista: fondo fijo
     os.environ["MAX_EPISODE_STEPS"] = str(int(args.max_episode_steps))
     os.environ["DRIVE_TYPE"] = args.drive
     os.environ["OFFTRACK_MAX_STEPS"] = str(int(args.offtrack_grace))
