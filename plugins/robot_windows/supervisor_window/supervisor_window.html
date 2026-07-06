@@ -52,6 +52,36 @@
       </section>
 
       <section class="card">
+        <h2>Fondo (domain randomization)</h2>
+        <p>
+          Cambia a mano la textura de la pared y el skybox para probar/calibrar. Son
+          las mismas que rota el domain randomization por episodio.
+        </p>
+        <div class="status-grid">
+          <div class="status-row">
+            <span class="label">Textura de pared</span>
+            <select id="wall-select">
+              <option value="">(sin texturas)</option>
+            </select>
+          </div>
+          <div class="status-row">
+            <span class="label">Pared actual</span>
+            <code id="current-wall">N/A</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Skybox</span>
+            <select id="skybox-select">
+              <option value="">(sin skyboxes)</option>
+            </select>
+          </div>
+          <div class="status-row">
+            <span class="label">Skybox actual</span>
+            <code id="current-skybox">N/A</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
         <h2>Carril / Off-track</h2>
         <p>
           Estado de visión del supervisor. <strong>center_rgb</strong> es el color
