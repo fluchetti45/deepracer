@@ -55,3 +55,5 @@ worlds/.backup/
 .DS_Store
 Thumbs.db
 desktop.ini
+# ---- Datasets del maestro (destilacion): 431MB, regenerables con rl.collect_teacher ----
+data/
