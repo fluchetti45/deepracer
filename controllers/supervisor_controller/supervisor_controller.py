@@ -213,7 +213,13 @@ class SupervisorController:
         self.policy_runner = PolicyRunner()
         self.policy_status = self.policy_runner.status_dict()
         self.policy_debug_snapshot = None
-        self.reset_rng = np.random.default_rng()
+        # RNG de reset (spawn + fondo). Sin seed = no reproducible (default de training).
+        # En EVAL se puede fijar con RESET_RNG_SEED para que TODOS los modelos vean la
+        # misma secuencia de spawns/fondos episodio-a-episodio (comparacion justa).
+        _reset_seed = os.environ.get("RESET_RNG_SEED", "")
+        self.reset_rng = np.random.default_rng(
+            int(_reset_seed) if _reset_seed.strip() != "" else None
+        )
         # Mapa track->spawns (spawns.json). None => textura/pose por defecto del .wbt.
         self.track_spawns = self._load_track_spawns()
         # Catalogo para el selector de pista de la UI: TODAS las worlds/*.png (incl. eval)

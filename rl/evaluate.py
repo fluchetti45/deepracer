@@ -144,6 +144,19 @@ def parse_args():
     parser.add_argument(
         "--device", default="cpu", help="Dispositivo de PyTorch para la inferencia."
     )
+    # --- Robustez: randomizar el fondo TAMBIEN en eval ---
+    parser.add_argument(
+        "--randomize-background", action="store_true",
+        help="Rotar pared+skybox aleatoriamente por episodio TAMBIEN en eval (prob=1.0). "
+             "Test de robustez a fondo: mide cuanto depende el modelo del fondo. Default OFF "
+             "(fondo fijo, comparable con evals previos).",
+    )
+    parser.add_argument(
+        "--eval-seed", type=int, default=None,
+        help="Seed del RNG de reset del supervisor (spawn + fondo). Si se fija, TODOS los "
+             "modelos ven la MISMA secuencia de spawns/fondos episodio-a-episodio -> "
+             "comparacion justa. Sin fijar = no reproducible (comportamiento previo).",
+    )
     return parser.parse_args()
 
 
@@ -414,6 +427,8 @@ def save_eval_results(args, model_zip, n_stack, results):
         "laps_requested": int(args.laps),  # solo significativo en modo "laps"
         "max_episode_steps": int(args.max_episode_steps),
         "deterministic": not args.stochastic,
+        "randomized_background": bool(args.randomize_background),
+        "eval_seed": args.eval_seed,
         "dt": float(args.dt),
         "tracks": [summarize_result(r, args.laps, args.dt) for r in results],
     }
@@ -508,7 +523,15 @@ def run_evaluation(args):
 
     # Config comun para todos los tracks (heredada por cada Webots que se lanza).
     os.environ["DOMAIN_RANDOMIZATION_ENABLED"] = "0"
-    os.environ["BACKGROUND_RANDOMIZATION_ENABLED"] = "0"  # eval determinista: fondo fijo
+    if args.randomize_background:
+        # Test de robustez: fondo aleatorio por episodio (siempre, prob=1.0).
+        os.environ["BACKGROUND_RANDOMIZATION_ENABLED"] = "1"
+        os.environ["BACKGROUND_RANDOMIZATION_PROBABILITY"] = "1.0"
+    else:
+        os.environ["BACKGROUND_RANDOMIZATION_ENABLED"] = "0"  # eval determinista: fondo fijo
+    if args.eval_seed is not None:
+        # Fija spawn + fondo para que todos los modelos vean la misma secuencia de episodios.
+        os.environ["RESET_RNG_SEED"] = str(int(args.eval_seed))
     os.environ["MAX_EPISODE_STEPS"] = str(int(args.max_episode_steps))
 
     if args.episodes is not None:
