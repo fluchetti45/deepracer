@@ -4,7 +4,7 @@
 conducir en un agente de carreras estilo **AWS DeepRacer**, y por qué **destilar un maestro geométrico**
 gana. Entrenado con **PPO (Stable-Baselines3)** dentro del simulador **Webots**.
 
-> 📄 **Página interactiva (paper):** <https://claude.ai/code/artifact/025e728b-7f37-401f-88da-79abd9122f68>
+> 📄 **Página interactiva (paper):** <https://fluchetti45.github.io/deepracer/>
 > — versión navegable con las figuras a color, tablas y saliencia. Este README la espeja.
 
 ---
