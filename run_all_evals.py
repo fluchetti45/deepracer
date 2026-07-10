@@ -20,6 +20,7 @@
 #   python run_all_evals.py --models <id>                            # fondo fijo, sin seed
 
 import argparse
+import glob
 import json
 import os
 import subprocess
@@ -87,12 +88,53 @@ def resolve_branch(model_dir):
     )
 
 
+def discover_models(models_dir, variants, timesteps):
+    """run_dir mas nuevo por (variant, seed) de las variantes pedidas. RL filtra timesteps;
+    las destiladas (regime distill) se toman sin importar timesteps."""
+    best = {}  # (variant, seed) -> (run_dir, mtime)
+    for d in glob.glob(os.path.join(models_dir, "*")):
+        mf = os.path.join(d, "run_metadata.json")
+        if not os.path.isdir(d) or not os.path.exists(mf):
+            continue
+        try:
+            m = json.load(open(mf, encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        v = m.get("variant")
+        if v not in variants:
+            continue
+        hp = m.get("hyperparameters") or {}
+        is_distill = m.get("training_regime") == "distill"
+        if not is_distill and timesteps is not None and hp.get("total_timesteps") != timesteps:
+            continue
+        seed = hp.get("seed")
+        key = (v, seed)
+        mt = os.path.getmtime(d)
+        if key not in best or mt > best[key][1]:
+            best[key] = (d, mt)
+    # ordenar por variante (orden de --variants) y luego seed
+    ordered = sorted(best.items(), key=lambda kv: (variants.index(kv[0][0]),
+                                                    (kv[0][1] if kv[0][1] is not None else -1)))
+    return [os.path.normpath(run_dir) for (_key, (run_dir, _mt)) in ordered]
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="Evalua varios modelos, cada uno en su rama git (switcheo automatico)."
     )
-    p.add_argument("--models", nargs="+", required=True,
-                   help="run_dirs o ids bajo models/ a evaluar (ej: 20260706164309 ...).")
+    p.add_argument("--models", nargs="+", default=None,
+                   help="run_dirs o ids bajo models/ a evaluar (ej: 20260706164309 ...). "
+                        "Si se omite, usar --discover.")
+    p.add_argument("--discover", action="store_true",
+                   help="Descubrir automaticamente los modelos a evaluar (5 variantes finales, "
+                        "el run_dir mas nuevo por seed). RL filtrados por --timesteps.")
+    p.add_argument("--variants", nargs="+",
+                   default=["vision_1frame", "vision_stacked", "vision_lstm",
+                            "geometrica", "vision_distill"],
+                   help="Variantes a descubrir con --discover.")
+    p.add_argument("--timesteps", type=int, default=1000000,
+                   help="Filtro de total_timesteps para las variantes RL en --discover "
+                        "(las destiladas se toman sin importar timesteps).")
     p.add_argument("--models-dir", default="models")
     # --- Pasan tal cual a rl.evaluate ---
     p.add_argument("--episodes", type=int, default=None,
@@ -127,9 +169,20 @@ def main():
             "(el script hace git checkout entre ramas)."
         )
 
+    models = args.models
+    if not models:
+        if not args.discover:
+            raise SystemExit("Pasa --models <ids> o --discover para auto-descubrir.")
+        models = discover_models(args.models_dir, args.variants, args.timesteps)
+        if not models:
+            raise SystemExit("--discover no encontro modelos para las variantes pedidas.")
+        print(f"[discover] {len(models)} modelos:")
+        for mm in models:
+            print(f"    {os.path.basename(mm)}")
+
     # Resolver cada modelo -> (dir, rama) y agrupar por rama preservando el orden.
     order, groups, labels = [], {}, {}
-    for m in args.models:
+    for m in models:
         d = resolve_model_dir(m, args.models_dir)
         branch, variant = resolve_branch(d)
         if branch not in groups:
