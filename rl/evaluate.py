@@ -172,6 +172,11 @@ def parse_args():
              "modelos ven la MISMA secuencia de spawns/fondos episodio-a-episodio -> "
              "comparacion justa. Sin fijar = no reproducible (comportamiento previo).",
     )
+    parser.add_argument(
+        "--no-save-results", action="store_true",
+        help="No escribir eval_results_<ts>.json. Para volcar frames (--dump-frames) sin "
+             "pisar el eval del modelo (el analysis toma el eval_results mas reciente).",
+    )
     return parser.parse_args()
 
 
@@ -618,7 +623,10 @@ def run_evaluation(args):
     if len(results) > 1:
         print_overall_summary(results, args)
 
-    save_eval_results(args, model_zip, n_stack, results)
+    if getattr(args, "no_save_results", False):
+        print("[dump] --no-save-results: NO se escribe eval_results (solo volcado de frames).")
+    else:
+        save_eval_results(args, model_zip, n_stack, results)
 
 
 def main():
