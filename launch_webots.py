@@ -53,21 +53,24 @@ def _spawn_webots(args, port=None):
         env["TRAIN_SERVER_PORT"] = str(port)
         env["DEFAULT_PORT"] = str(port)
 
-    command = [
-        args.webots_executable,
-        "--batch",
-        "--minimize",
-        "--no-rendering",
-        world_path,
-    ]
-    print(f"Lanzando Webots{'' if port is None else f' (puerto {port})'}: {command}")
+    # Modo grabacion: con WEBOTS_RENDER=1 se abre Webots CON render 3D (sin --no-rendering
+    # ni --minimize), necesario para que movieStartRecording capture el viewport. Por
+    # defecto (train/eval) sigue headless y minimizado para maxima velocidad.
+    render = os.environ.get("WEBOTS_RENDER", "") == "1"
+    command = [args.webots_executable, "--batch"]
+    if not render:
+        command += ["--minimize", "--no-rendering"]
+    command += [world_path]
+    print(f"Lanzando Webots{'' if port is None else f' (puerto {port})'}"
+          f"{' [render]' if render else ''}: {command}")
 
     process = subprocess.Popen(
         command,
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW,
+        # Con render mostramos la ventana (para ver/grabar); headless sin ventana.
+        creationflags=0 if render else subprocess.CREATE_NO_WINDOW,
     )
     atexit.register(process.kill)
     return process
@@ -77,7 +80,8 @@ def launch_webots(args):
     """Lanza UNA instancia (comportamiento original) y espera su inicializacion."""
     process = _spawn_webots(args)
     print("Esperando inicializacion de Webots...")
-    time.sleep(10)
+    # Con render (grabacion) la GUI tarda mas en estar lista que en modo headless.
+    time.sleep(16 if os.environ.get("WEBOTS_RENDER", "") == "1" else 10)
     return process
 
 
