@@ -1,0 +1,12 @@
+# Artefactos de compilacion LaTeX (el PDF main.pdf SI se versiona)
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+*.lof
+*.lot

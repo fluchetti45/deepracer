@@ -6,6 +6,7 @@ gana. Entrenado con **PPO (Stable-Baselines3)** dentro del simulador **Webots**.
 
 > 📄 **Página interactiva (paper):** <https://fluchetti45.github.io/deepracer/>
 > — versión navegable con las figuras a color, tablas y saliencia. Este README la espeja.
+> **Versión LaTeX (IEEE):** [`paper/`](paper/) · [`paper/main.pdf`](paper/main.pdf).
 
 ---
 
