@@ -1387,20 +1387,58 @@ class SupervisorController:
         }
 
     def _handle_start_recording_request(self, request, request_id):
-        # TODO: implementar grabacion de episodios
-        return {
-            "type": "error",
-            "request_id": request_id,
-            "message": "start_recording no implementado aun",
-        }
+        """
+        Arranca la grabacion de un video del viewport 3D con la API de Webots
+        (movieStartRecording). Pasa la sim a REAL_TIME para que Webots renderice
+        (en FAST no hay 3D -> el video saldria negro). Requiere que Webots se haya
+        lanzado CON render (WEBOTS_RENDER=1, ver launch_webots). El .env de eval sigue
+        andando igual: esto solo se activa cuando el cliente manda start_recording.
+        """
+        path = request.get("path")
+        if not path:
+            return {"type": "error", "request_id": request_id,
+                    "message": "start_recording sin 'path'."}
+        width = int(request.get("width", 1280))
+        height = int(request.get("height", 720))
+        quality = int(request.get("quality", 95))
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            # Renderizar en tiempo real para capturar el viewport.
+            self.supervisor.simulationSetMode(Supervisor.SIMULATION_MODE_REAL_TIME)
+            # Firma Webots R2025a: movieStartRecording(file, width, height, codec,
+            # quality, acceleration, caption). codec=0 y acceleration=1 (tiempo real).
+            self.supervisor.movieStartRecording(
+                path, width, height, 0, quality, 1, False
+            )
+            self.current_recording_path = path
+            log_supervisor(f"[Supervisor] grabando video -> {path}", force=True)
+            return {"type": "recording_started", "request_id": request_id, "path": path}
+        except Exception as error:  # noqa: BLE001
+            return {"type": "error", "request_id": request_id,
+                    "message": f"start_recording fallo: {error}"}
 
     def _handle_stop_recording_request(self, request, request_id):
-        # TODO: implementar grabacion de episodios
-        return {
-            "type": "error",
-            "request_id": request_id,
-            "message": "stop_recording no implementado aun",
-        }
+        """
+        Detiene la grabacion y ESPERA a que Webots termine de codificar el mp4
+        (movieIsReady) antes de responder, para que el archivo quede finalizado aunque
+        el cliente cierre/mate Webots inmediatamente despues. Vuelve a modo FAST.
+        """
+        try:
+            self.supervisor.movieStopRecording()
+            # Dar tiempo a la codificacion: avanzar pasos hasta que el movie este listo.
+            for _ in range(4000):  # tope ~ generoso; movieIsReady corta antes
+                if self.supervisor.movieIsReady():
+                    break
+                if self.supervisor.step(self.timestep) == -1:
+                    break
+            path = self.current_recording_path
+            self.current_recording_path = None
+            self.supervisor.simulationSetMode(Supervisor.SIMULATION_MODE_FAST)
+            log_supervisor(f"[Supervisor] video finalizado -> {path}", force=True)
+            return {"type": "recording_stopped", "request_id": request_id, "path": path}
+        except Exception as error:  # noqa: BLE001
+            return {"type": "error", "request_id": request_id,
+                    "message": f"stop_recording fallo: {error}"}
 
     def _handle_save_camera_sample(self):
         """

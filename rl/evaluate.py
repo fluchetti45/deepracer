@@ -162,6 +162,12 @@ def parse_args():
         help="No escribir eval_results_<ts>.json. Para volcar frames (--dump-frames) sin "
              "pisar el eval del modelo (el analysis toma el eval_results mas reciente).",
     )
+    parser.add_argument(
+        "--record-movie", default=None, metavar="DIR",
+        help="Graba un video mp4 del viewport 3D por track en DIR (Webots movieStartRecording). "
+             "Lanza Webots CON render (WEBOTS_RENDER=1) y NO escribe eval_results (implica "
+             "--no-save-results). El archivo se nombra <variante>_s<seed>_<track>.mp4.",
+    )
     return parser.parse_args()
 
 
@@ -191,6 +197,27 @@ def read_n_stack(metadata_path, default):
         return int(data["hyperparameters"]["n_stack"])
     except (OSError, ValueError, KeyError, TypeError):
         return default
+
+
+def read_variant_seed(metadata_path, fallback):
+    """(variante, seed) desde run_metadata.json para nombrar el video. fallback = basename."""
+    variant, seed = fallback, None
+    try:
+        with open(metadata_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        variant = data.get("variant") or fallback
+        seed = (data.get("hyperparameters") or {}).get("seed")
+    except (OSError, ValueError, TypeError):
+        pass
+    return variant, seed
+
+
+def movie_filename(record_dir, variant, seed, texture, laps):
+    """<record_dir>/<variante>_s<seed>_<track>_<laps>laps.mp4 (nombre acorde al modelo)."""
+    stem = os.path.splitext(os.path.basename(texture))[0]
+    seed_txt = f"s{seed}" if seed is not None else "s?"
+    name = f"{variant}_{seed_txt}_{stem}_{laps}laps.mp4"
+    return os.path.join(record_dir, name)
 
 
 def build_eval_spawns(spawns_path, texture, spawn_index):
@@ -233,8 +260,11 @@ def build_eval_spawns(spawns_path, texture, spawn_index):
 
 
 def build_vec_env(host, port, vecnormalize_path, n_stack):
-    """DummyVecEnv -> VecNormalize (cargado, sin entrenar) -> VecFrameStack, igual que el train."""
-    vec_env = DummyVecEnv([lambda: NavEnv(host=host, port=port)])
+    """DummyVecEnv -> VecNormalize (cargado, sin entrenar) -> VecFrameStack, igual que el train.
+    Devuelve (vec_env, nav_env): nav_env es el NavEnv base, para poder mandar requests de
+    control (p.ej. start/stop_recording) por su bridge sin abrir otra conexion."""
+    nav_env = NavEnv(host=host, port=port)
+    vec_env = DummyVecEnv([lambda: nav_env])
     if os.path.exists(vecnormalize_path):
         vec_env = VecNormalize.load(vecnormalize_path, vec_env)
         vec_env.training = False  # no actualizar estadisticas en evaluacion
@@ -246,7 +276,7 @@ def build_vec_env(host, port, vecnormalize_path, n_stack):
         )
     if n_stack and n_stack > 1:
         vec_env = VecFrameStack(vec_env, n_stack=n_stack)
-    return vec_env
+    return vec_env, nav_env
 
 
 def classify_done(info):
@@ -271,10 +301,12 @@ def discover_eval_tracks(spawns_path):
     ]
 
 
-def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, texture):
+def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, texture,
+                       movie_path=None):
     """
     Evalua UN track: lanza su propio Webots forzando ese unico track, corre hasta
     juntar --laps vueltas (o agotar max_episodes) y devuelve un dict de resultados.
+    Si movie_path esta seteado, graba un video del viewport durante ese track.
     """
     eval_spawns_path, has_gates = build_eval_spawns(
         args.spawns, texture, args.spawn_index
@@ -285,10 +317,13 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
     print("=" * 56)
     print(f"TRACK: {texture}  (spawn #{args.spawn_index}, "
           f"deteccion: {'gates' if has_gates else 'linea de meta unica'})")
+    if movie_path:
+        print(f"GRABANDO: {movie_path}")
     print("-" * 56)
 
     webots_process = None
     vec_env = None
+    nav_env = None
     lap_steps_list = []           # steps de las vueltas COMPLETAS
     failures = {}                 # motivo -> conteo
     episode_rewards = []          # retorno (reward acumulado) de CADA episodio
@@ -297,7 +332,15 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
         if not args.no_webots_launch:
             webots_process = launch_webots(args)
 
-        vec_env = build_vec_env(args.host, args.port, vecnormalize_path, n_stack)
+        vec_env, nav_env = build_vec_env(args.host, args.port, vecnormalize_path, n_stack)
+
+        if movie_path:
+            # Arranca la grabacion (pasa el supervisor a REAL_TIME y empieza el mp4).
+            resp = nav_env.bridge.request(
+                {"type": "start_recording", "path": os.path.abspath(movie_path)}
+            )
+            if isinstance(resp, dict) and resp.get("type") == "error":
+                print(f"  [rec] no se pudo iniciar la grabacion: {resp.get('message')}")
 
         obs = vec_env.reset()
         episode = 0
@@ -346,6 +389,13 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
             ep_reward = 0.0
             wall_start = time.perf_counter()
     finally:
+        # Cerrar la grabacion ANTES de matar Webots: el supervisor finaliza el mp4
+        # (movieStopRecording + espera movieIsReady) y recien responde.
+        if movie_path and nav_env is not None:
+            try:
+                nav_env.bridge.request({"type": "stop_recording"}, timeout=180)
+            except Exception as exc:
+                print(f"  [rec] error al cerrar la grabacion: {exc}")
         if vec_env is not None:
             vec_env.close()
         if webots_process is not None:
@@ -526,6 +576,16 @@ def run_evaluation(args):
             "Para varios tracks de eval, deja que el script lance Webots por track."
         )
 
+    # Grabacion de video: render ON, y NO pisar el eval del paper (implica no-save).
+    recording = bool(args.record_movie)
+    if recording:
+        os.environ["WEBOTS_RENDER"] = "1"
+        args.no_save_results = True
+        os.makedirs(args.record_movie, exist_ok=True)
+        if args.no_webots_launch:
+            raise SystemExit("--record-movie necesita lanzar Webots CON render; quita "
+                             "--no-webots-launch.")
+
     # Config comun para todos los tracks (heredada por cada Webots que se lanza).
     os.environ["DOMAIN_RANDOMIZATION_ENABLED"] = "0"
     if args.randomize_background:
@@ -553,10 +613,16 @@ def run_evaluation(args):
 
     model = PPO.load(model_zip, device=args.device)
 
+    variant, seed = read_variant_seed(metadata_path, os.path.basename(os.path.dirname(model_zip)))
+
     results = []
     for texture in tracks:
+        movie_path = (
+            movie_filename(args.record_movie, variant, seed, texture, args.laps)
+            if recording else None
+        )
         result = evaluate_one_track(
-            args, model, n_stack, vecnormalize_path, max_episodes, texture
+            args, model, n_stack, vecnormalize_path, max_episodes, texture, movie_path
         )
         print_track_summary(result, args)
         results.append(result)
