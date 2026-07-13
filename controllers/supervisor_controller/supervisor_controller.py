@@ -68,14 +68,25 @@ ACTION_REPEAT = read_env_value("ACTION_REPEAT", 5)
 # y display); el mapeo real vive en el agent_controller.
 WHEEL_MIN_SPEED = read_env_value("WHEEL_MIN_SPEED", 0.75, float)
 WHEEL_MAX_SPEED = read_env_value("WHEEL_MAX_SPEED", 5.0, float)
+# Radio de la rueda (m). e-puck ~0.02. Se usa para derivar la vmax lineal real.
+WHEEL_RADIUS = read_env_value("WHEEL_RADIUS", 0.02, float)
+# Tope fisico del motor (rad/s). El supervisor lo aplica al maxVelocity de los motores
+# del .wbt al arrancar (getFromDef) -> el tope se controla 100% desde el .env, sin
+# editar el world. Debe ser >= WHEEL_MAX_SPEED.
+MOTOR_MAX_SPEED = read_env_value("MOTOR_MAX_SPEED", 6.28, float)
 # Cada cuantos steps se manda un heartbeat de estado a la UI cuando no hay cliente.
 UI_HEARTBEAT_PERIOD = read_env_value("UI_HEARTBEAT_PERIOD", 200)
 # Bonus terminal al alcanzar el target.
 ARRIVAL_BONUS = read_env_value("ARRIVAL_BONUS", 1.0)
 # Velocidades maximas REALES (para normalizar la velocidad a ~[-1, 1]). Es el
 # DIVISOR de normalizacion: debe ser ~la vmax real del robot para que "a fondo"
-# mapee a ~1.0. e-puck: WHEEL_MAX_SPEED * radio_rueda = 5.0 * 0.02 = 0.1 m/s.
-MAX_LINEAR_SPEED = read_env_value("MAX_LINEAR_SPEED", 0.1)
+# mapee a ~1.0. Se DERIVA de WHEEL_MAX_SPEED * WHEEL_RADIUS para que siga siempre al
+# rango calibrado (no queda desincronizado). Si .env fija MAX_LINEAR_SPEED explicito,
+# ese override manda. e-puck: 5.0 * 0.02 = 0.1 m/s.
+_max_lin_override = os.environ.get("MAX_LINEAR_SPEED", "").strip()
+MAX_LINEAR_SPEED = (
+    float(_max_lin_override) if _max_lin_override else WHEEL_MAX_SPEED * WHEEL_RADIUS
+)
 MAX_ANGULAR_SPEED = read_env_value("MAX_ANGULAR_SPEED", 2.0 * math.pi)
 # Radio por defecto del target cuando no se puede resolver del nodo.
 TARGET_DEFAULT_RADIUS = read_env_value("TARGET_DEFAULT_RADIUS", 0.05)
@@ -204,6 +215,8 @@ class SupervisorController:
         self.epuck_rotation_field = self.epuck_robot.getField("rotation")
         self.epuck_robot_initial_translation = list(self.epuck_translation_field.getSFVec3f())
         self.epuck_robot_initial_rotation = list(self.epuck_rotation_field.getSFRotation())
+        # Tope de motor desde .env (sin editar el .wbt): setea maxVelocity de las ruedas.
+        self._apply_motor_max_velocity()
         self.last_action_label = "idle"
         self.last_robot_message = None
         self.last_camera_frame = None
@@ -308,6 +321,27 @@ class SupervisorController:
                 raise RuntimeError(
                     "La simulacion de Webots se detuvo durante un avance interno."
                 )
+
+    def _apply_motor_max_velocity(self):
+        """
+        Setea el maxVelocity de los motores del e-puck desde MOTOR_MAX_SPEED (.env),
+        para controlar el tope de velocidad sin editar el .wbt. Requiere que los motores
+        esten DEF-eados en el world (EPUCK_LEFT_MOTOR / EPUCK_RIGHT_MOTOR). Best-effort:
+        si no encuentra el DEF, avisa y sigue (queda el maxVelocity del .wbt).
+        """
+        for def_name in ("EPUCK_LEFT_MOTOR", "EPUCK_RIGHT_MOTOR"):
+            node = self.supervisor.getFromDef(def_name)
+            if node is None:
+                log_supervisor(
+                    f"[Supervisor] {def_name} sin DEF en el .wbt: no puedo setear "
+                    "maxVelocity desde .env (queda el del world).", force=True)
+                continue
+            field = node.getField("maxVelocity")
+            if field is not None:
+                field.setSFFloat(float(MOTOR_MAX_SPEED))
+        log_supervisor(
+            f"[Supervisor] maxVelocity de motores = {MOTOR_MAX_SPEED} rad/s "
+            f"(MOTOR_MAX_SPEED del .env).", force=True)
 
     def _reset_robot_pose(self, translation=None, rotation=None):
         """

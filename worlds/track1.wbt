@@ -65,10 +65,10 @@ DEF EPUCK Robot {
         anchor 0 0 0.02
       }
       device [
-        RotationalMotor {
+        DEF EPUCK_LEFT_MOTOR RotationalMotor {
           name "left wheel motor"
           consumptionFactor -0.001
-          maxVelocity 6.28
+          maxVelocity 20.0
         }
         PositionSensor {
           name "left wheel sensor"
@@ -217,10 +217,10 @@ DEF EPUCK Robot {
         anchor 0 0 0.02
       }
       device [
-        RotationalMotor {
+        DEF EPUCK_RIGHT_MOTOR RotationalMotor {
           name "right wheel motor"
           consumptionFactor -0.001
-          maxVelocity 6.28
+          maxVelocity 20.0
         }
         PositionSensor {
           name "right wheel sensor"
