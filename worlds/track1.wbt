@@ -5,6 +5,8 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/floors/protos/RectangleArena.proto"
 
 WorldInfo {
+  basicTimeStep 16
+  FPS 60
 }
 Viewpoint {
   orientation -0.5035148678562779 0.20534107603998084 0.8392304929746166 2.482089341403223

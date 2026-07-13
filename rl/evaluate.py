@@ -118,10 +118,10 @@ def parse_args():
     parser.add_argument(
         "--dt",
         type=float,
-        default=0.16,
+        default=0.08,
         help=(
             "Segundos de simulacion por step de env, para reportar tiempo de vuelta "
-            "(basicTimeStep * ACTION_REPEAT / 1000 = 32ms * 5 = 0.16s por defecto)."
+            "(basicTimeStep * ACTION_REPEAT / 1000 = 16ms * 5 = 0.08s por defecto)."
         ),
     )
     parser.add_argument("--host", default="127.0.0.1", help="Host del supervisor.")
