@@ -303,6 +303,26 @@ function wireButtons() {
     sendMessage({ type: "capture_frame", mode: "full" });
   });
 
+  // --- Test de velocidad constante (calibracion de min/max) ---
+  const speedInput = document.getElementById("test-speed-input");
+  const applyTestSpeed = () => {
+    const v = parseFloat(speedInput?.value);
+    if (!Number.isNaN(v)) sendMessage({ type: "test_speed", rad_s: v });
+  };
+  document.getElementById("test-speed-min").addEventListener("click", () => {
+    sendMessage({ type: "test_speed", preset: "min" });
+  });
+  document.getElementById("test-speed-max").addEventListener("click", () => {
+    sendMessage({ type: "test_speed", preset: "max" });
+  });
+  document.getElementById("test-speed-apply").addEventListener("click", applyTestSpeed);
+  speedInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") applyTestSpeed();
+  });
+  document.getElementById("test-speed-stop").addEventListener("click", () => {
+    sendMessage({ type: "test_speed", rad_s: 0 });
+  });
+
   document.getElementById("track-select").addEventListener("change", (event) => {
     const texture = event.target.value;
     if (texture) sendMessage({ type: "set_track", texture });
@@ -395,6 +415,11 @@ window.onload = () => {
     updateText("episode-id",    String(data.episode_id ?? 0));
     updateText("episode-step",  String(data.episode_step ?? 0));
     updateText("training-client", data.training_client_connected ? "Conectado" : "Sin cliente");
+    // Rango de velocidad actual (.env) para el modo test de calibracion.
+    updateText("wheel-min",
+      data.wheel_min_speed != null ? data.wheel_min_speed.toFixed(2) + " rad/s" : "N/A");
+    updateText("wheel-max",
+      data.wheel_max_speed != null ? data.wheel_max_speed.toFixed(2) + " rad/s" : "N/A");
     updateText("last-robot-message",
       data.last_robot_message
         ? JSON.stringify(data.last_robot_message, null, 2)

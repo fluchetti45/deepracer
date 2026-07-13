@@ -17,6 +17,8 @@ HEADER_SIZE = struct.calcsize(HEADER_FMT)
 # WHEEL_MAX_SPEED queda clampeado por la maxVelocity del motor en el .wbt (6.28).
 WHEEL_MIN_SPEED = read_env_value("WHEEL_MIN_SPEED", 0.75, float)  # rad/s
 WHEEL_MAX_SPEED = read_env_value("WHEEL_MAX_SPEED", 5.0, float)   # rad/s
+# Tope fisico del motor (maxVelocity del .wbt). Acota el test de velocidad cruda.
+MOTOR_MAX_SPEED = read_env_value("MOTOR_MAX_SPEED", 6.28, float)  # rad/s
 
 
 class EpuckController:
@@ -82,6 +84,18 @@ class EpuckController:
         self.left_motor.setVelocity(0.0)
         self.right_motor.setVelocity(0.0)
 
+    def _apply_wheels_raw(self, left_rad_s: float, right_rad_s: float):
+        """
+        Setea las ruedas a una velocidad CRUDA en rad/s (sin pasar por el mapeo
+        [-1,1] -> [MIN, MAX]). Para el modo de test/calibracion de velocidades:
+        permite probar un rad/s exacto y buscar un min/max coherente sin relanzar.
+        Se acota a [0, MOTOR_MAX_SPEED] (el motor no acepta mas que su maxVelocity).
+        """
+        left = float(np.clip(left_rad_s, 0.0, MOTOR_MAX_SPEED))
+        right = float(np.clip(right_rad_s, 0.0, MOTOR_MAX_SPEED))
+        self.left_motor.setVelocity(left)
+        self.right_motor.setVelocity(right)
+
     def _read_wheel_state(self) -> list:
         # TODO: leer velocidades de rueda y normalizar
         return [0.0, 0.0]
@@ -134,6 +148,19 @@ class EpuckController:
             "request_id": msg.get("request_id"),
         })
 
+    def _handle_apply_wheels_raw(self, msg: dict):
+        """
+        Modo test de velocidad: aplica rad/s crudos. `rad_s` setea ambas ruedas
+        (avance recto); left/right permiten valores por rueda. Fire-and-forget.
+        """
+        if "rad_s" in msg:
+            v = float(msg.get("rad_s", 0.0))
+            self._apply_wheels_raw(v, v)
+        else:
+            self._apply_wheels_raw(
+                float(msg.get("left", 0.0)), float(msg.get("right", 0.0))
+            )
+
     def _handle_request_observation(self, msg: dict):
         """
         Devuelve la observacion sensorial actual del robot: imagen de la camara
@@ -160,6 +187,7 @@ class EpuckController:
         handlers = {
             "act":                 self._handle_act,
             "apply_action":        self._handle_apply_action,
+            "apply_wheels_raw":    self._handle_apply_wheels_raw,
             "reset_robot":         self._handle_reset_robot,
             "request_observation": self._handle_request_observation,
         }

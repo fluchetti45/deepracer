@@ -63,6 +63,11 @@ MAX_EPISODE_STEPS = read_env_value("MAX_EPISODE_STEPS", 1000)
 RESET_SETTLE_STEPS = read_env_value("RESET_SETTLE_STEPS", 10)
 # Cantidad de ticks que se repite una misma accion (frame-skip).
 ACTION_REPEAT = read_env_value("ACTION_REPEAT", 5)
+# Rango de velocidad de rueda (rad/s) que usa el robot para mapear la accion [-1,1].
+# Se leen aca solo para el modo TEST de velocidad de la Robot Window (presets min/max
+# y display); el mapeo real vive en el agent_controller.
+WHEEL_MIN_SPEED = read_env_value("WHEEL_MIN_SPEED", 0.75, float)
+WHEEL_MAX_SPEED = read_env_value("WHEEL_MAX_SPEED", 5.0, float)
 # Cada cuantos steps se manda un heartbeat de estado a la UI cuando no hay cliente.
 UI_HEARTBEAT_PERIOD = read_env_value("UI_HEARTBEAT_PERIOD", 200)
 # Bonus terminal al alcanzar el target.
@@ -521,6 +526,9 @@ class SupervisorController:
             "current_wall_texture": self.current_wall_texture,
             "available_skyboxes": SKYBOX_TEXTURES,
             "current_skybox": self.current_skybox,
+            # Rango de velocidad de rueda actual (.env) para el modo test de la UI.
+            "wheel_min_speed": WHEEL_MIN_SPEED,
+            "wheel_max_speed": WHEEL_MAX_SPEED,
         }
         self._send_ui_message(payload)
 
@@ -552,6 +560,8 @@ class SupervisorController:
                         message.get("action", [0.0, 0.0])
                     ).tolist()
                     self._handle_manual_action(label, action)
+                elif message_type == "test_speed":
+                    self._handle_test_speed(message)
                 elif message_type == "capture_frame":
                     mode = message.get("mode", self.debug_frame_mode)
                     self.debug_frame_mode = mode
@@ -597,6 +607,27 @@ class SupervisorController:
         self.last_action_label = label
         self._capture_debug_frame(mode=self.debug_frame_mode)
         self._send_ui_state(f"Accion manual enviada: {label}")
+
+    def _handle_test_speed(self, message):
+        """
+        Modo TEST de velocidad (calibracion): manda al robot un rad/s CRUDO en ambas
+        ruedas (avance recto, sin el mapeo [-1,1]->[MIN,MAX]). `preset` "min"/"max"
+        usa WHEEL_MIN/MAX_SPEED del .env; si no, usa `rad_s`. Sirve para buscar un
+        min y un max coherentes sin relanzar: probas un valor, mirás, ajustás.
+        """
+        preset = message.get("preset")
+        if preset == "min":
+            rad_s = WHEEL_MIN_SPEED
+        elif preset == "max":
+            rad_s = WHEEL_MAX_SPEED
+        else:
+            rad_s = float(message.get("rad_s", 0.0))
+        # Fire-and-forget: el robot aplica la velocidad y la mantiene hasta el proximo
+        # comando (setVelocity persiste). No hace falta esperar respuesta.
+        self.bridge.send_to_robot({"type": "apply_wheels_raw", "rad_s": rad_s})
+        self.last_commanded_wheel_state = [rad_s, rad_s]
+        self.last_action_label = f"test_speed {rad_s:.2f} rad/s"
+        self._send_ui_state(f"Test de velocidad: {rad_s:.2f} rad/s (ambas ruedas).")
 
     def _handle_set_track(self, message):
         """

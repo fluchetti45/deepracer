@@ -32,6 +32,37 @@
       </section>
 
       <section class="card">
+        <h2>Test de velocidad (calibracion)</h2>
+        <p>
+          Manda una velocidad de rueda CONSTANTE (rad/s, avance recto) para calibrar
+          un min y un max coherentes. "Avanzar a Min/Max" usan WHEEL_MIN/MAX_SPEED del
+          .env; el campo permite probar un rad/s exacto SIN relanzar. Cuando encuentres
+          los valores, ponelos en el .env (WHEEL_MIN_SPEED / WHEEL_MAX_SPEED) y reentrena.
+        </p>
+        <div class="status-grid">
+          <div class="status-row">
+            <span class="label">Min actual (.env)</span>
+            <code id="wheel-min">N/A</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Max actual (.env)</span>
+            <code id="wheel-max">N/A</code>
+          </div>
+          <div class="status-row">
+            <span class="label">Probar rad/s exacto</span>
+            <input id="test-speed-input" type="number" step="0.1" min="0"
+                   placeholder="ej: 2.5" />
+          </div>
+        </div>
+        <div class="button-grid">
+          <button id="test-speed-min">Avanzar a Min</button>
+          <button id="test-speed-max">Avanzar a Max</button>
+          <button id="test-speed-apply">Aplicar rad/s</button>
+          <button id="test-speed-stop" class="danger">Frenar</button>
+        </div>
+      </section>
+
+      <section class="card">
         <h2>Pista</h2>
         <p>
           Cambia la textura del piso para probar/calibrar a mano sobre cualquier
