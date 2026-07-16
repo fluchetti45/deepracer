@@ -15,13 +15,23 @@ import glob
 import json
 import os
 
-# Orden y etiquetas canónicas de las 4 variantes del ablation.
-VARIANT_ORDER = ["geometrica", "vision_1frame", "vision_stacked", "vision_lstm"]
+# Orden y etiquetas canónicas de las variantes del ablation.
+# vision_camonly = ablacion sin propiocepcion (obs = solo imagen); se compara contra vision_1frame.
+VARIANT_ORDER = [
+    "geometrica",
+    "vision_1frame",
+    "vision_camonly",
+    "vision_stacked",
+    "vision_lstm",
+    "vision_distill",
+]
 VARIANT_LABEL = {
     "geometrica": "Geometrica",
     "vision_1frame": "Vision (1 frame)",
+    "vision_camonly": "Vision solo camara (1 frame)",
     "vision_stacked": "Vision apilada (4)",
     "vision_lstm": "Vision + LSTM",
+    "vision_distill": "Vision destilada (geom)",
 }
 
 

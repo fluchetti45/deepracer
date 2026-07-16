@@ -25,7 +25,7 @@ from stable_baselines3.common.vec_env import (
 )
 from launch_webots import launch_webots, launch_webots_instances
 
-from rl.env import NavEnv
+from rl.env import NavEnv, CAMERA_ONLY
 
 
 class RLMetricsCallback(BaseCallback):
@@ -494,6 +494,13 @@ def build_vec_env(
         vec_env = VecNormalize.load(resume_vecnormalize_path, vec_env)
         vec_env.training = True
         vec_env.norm_reward = bool(norm_reward)
+    elif CAMERA_ONLY:
+        # Sin velocity que normalizar: solo se normaliza el reward (la imagen la maneja la CNN).
+        vec_env = VecNormalize(
+            vec_env,
+            norm_obs=False,
+            norm_reward=bool(norm_reward),
+        )
     else:
         vec_env = VecNormalize(
             vec_env,
@@ -640,6 +647,8 @@ def _derive_variant(model, n_stack):
     if type(model).__name__ == "RecurrentPPO":
         return "vision_lstm"
     if type(model.observation_space).__name__ == "Dict":  # obs con imagen
+        if CAMERA_ONLY:
+            return "vision_camonly"  # obs = solo imagen (sin propiocepcion)
         return "vision_stacked" if int(n_stack) >= 2 else "vision_1frame"
     return "geometrica"  # obs vector plano (MlpPolicy)
 

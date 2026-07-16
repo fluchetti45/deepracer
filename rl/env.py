@@ -11,6 +11,10 @@ PACKET_HEADER_FORMAT = read_env_value("SUPERVISOR_PACKET_HEADER_FORMAT", ">II", 
 PACKET_HEADER_SIZE = struct.calcsize(PACKET_HEADER_FORMAT)
 MAX_SPEED = read_env_value("MAX_SPEED", 6.28, float)
 MIN_SPEED = read_env_value("MIN_SPEED", -6.28, float)
+# Ablacion CAMERA-ONLY: si esta en 1, la observacion es SOLO la imagen (se descarta la
+# velocidad propioceptiva [forward, yaw_rate]). Sirve para medir cuanto aporta esa
+# propiocepcion que comparten todas las demas variantes. Misma CNN, sin la rama de velocidad.
+CAMERA_ONLY = read_env_value("CAMERA_ONLY", 0, int)
 
 class NavEnv(gym.Env):
     metadata = {"render_modes": []}
@@ -47,6 +51,9 @@ class NavEnv(gym.Env):
             # Imagen de la camara frontal (RGB, channel-first) — Level 3+.
             "image": build_image_space(),
         }
+        # Ablacion camera-only: la obs es SOLO la imagen (sin la propiocepcion de velocidad).
+        if CAMERA_ONLY:
+            observation_spaces = {"image": observation_spaces["image"]}
         self.observation_space = gym.spaces.Dict(observation_spaces)
         # Espacio de acción.
         # Vector de 2 elementos (rueda izq/der) NORMALIZADO en [-1.0, 1.0].
@@ -64,13 +71,19 @@ class NavEnv(gym.Env):
                 "La observacion del supervisor no tiene el formato esperado."
             )
 
+        image = decode_image_observation(observation_payload.get("image"))
+
+        # Camera-only: la obs es solo la imagen (el supervisor igual manda velocity, se ignora).
+        if CAMERA_ONLY:
+            observation = {"image": image}
+            self._validate_observation(observation)
+            return observation
+
         velocity_payload = observation_payload.get("velocity", [0.0] * self.velocity_size)
 
         velocity = np.asarray(velocity_payload, dtype=np.float32)
         if velocity.shape != (self.velocity_size,):
             raise RuntimeError(f"velocity invalido: {velocity_payload}")
-
-        image = decode_image_observation(observation_payload.get("image"))
 
         observation = {
             "velocity": velocity,

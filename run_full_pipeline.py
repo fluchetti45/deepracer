@@ -92,6 +92,10 @@ def parse_args():
     p.add_argument("--eval-seed", type=int, default=None,
                    help="Seed de reset (spawn+fondo) para que todas las seeds evaluen igual.")
     p.add_argument("--skip-eval", action="store_true", help="Solo FASE 1 (entrenar).")
+    p.add_argument("--camera-only", action="store_true",
+                   help="Ablacion vision pura: obs = SOLO imagen (sin propiocepcion de "
+                        "velocidad). Fuerza la unica variante vision_camonly (rama master, "
+                        "n_stack 1) y propaga CAMERA_ONLY=1 al train Y al eval por env var.")
     return p.parse_args()
 
 
@@ -149,11 +153,19 @@ def main():
             "(el pipeline hace git checkout entre ramas)."
         )
 
-    variants = VARIANTS
-    if args.only:
+    if args.camera_only:
+        # Ablacion vision pura: se propaga por env var; subprocess.run hereda os.environ,
+        # asi que rl.trainer (y sus workers) y rl.evaluate quedan todos camera-only.
+        os.environ["CAMERA_ONLY"] = "1"
+        print("[CAMERA-ONLY] obs = SOLO imagen (sin velocidad). Variante unica: "
+              "vision_camonly (rama master, n_stack 1). Train y eval heredan el flag.")
+        variants = [("master", 1, "vision_camonly")]
+    elif args.only:
         variants = [v for v in VARIANTS if v[2] in args.only]
         if not variants:
             raise SystemExit(f"--only no matchea. Validas: {[v[2] for v in VARIANTS]}")
+    else:
+        variants = VARIANTS
 
     origin = current_branch()
     manifest_path = os.path.join(

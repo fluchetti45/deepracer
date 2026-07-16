@@ -70,6 +70,12 @@ def parse_args():
         help="Puerto base para los N Webots del train (default: 10001).",
     )
     p.add_argument("--device", default="auto", help="Dispositivo de PyTorch para el train.")
+    p.add_argument(
+        "--camera-only", action="store_true",
+        help="Ablacion CAMERA-ONLY: la obs es SOLO la imagen (se descarta la propiocepcion de "
+             "velocidad que comparten las demas variantes). Misma CNN que vision 1-frame, sin la "
+             "rama de velocidad. Se aplica a train y eval de todas las seeds.",
+    )
     # --- Eval ---
     p.add_argument(
         "--episodes", type=int, default=None,
@@ -122,6 +128,14 @@ def eval_one(args, run_dir):
 
 def main():
     args = parse_args()
+
+    # CAMERA-ONLY: se propaga por variable de entorno; subprocess.run hereda os.environ,
+    # asi que el trainer, sus workers (SubprocVecEnv) y el evaluate quedan todos camera-only.
+    if args.camera_only:
+        os.environ["CAMERA_ONLY"] = "1"
+        print("[CAMERA-ONLY] Observacion = SOLO imagen (sin propiocepcion de velocidad). "
+              "Train y eval de todas las seeds heredan el flag.")
+
     runs = []  # [{seed, run_dir, status}]
 
     for seed in args.seeds:
@@ -156,6 +170,7 @@ def main():
     manifest = {
         "created": stamp,
         "n_stack": int(args.n_stack),
+        "camera_only": bool(args.camera_only),
         "total_timesteps": int(args.total_timesteps),
         "webots_world": args.webots_world,
         "eval_mode": (
