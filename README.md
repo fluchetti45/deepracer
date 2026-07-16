@@ -17,12 +17,18 @@ con PPO en Webots sobre el **mismo entorno, recompensa, presupuesto (1M timestep
 *lo único que cambia es la observación*:
 
 - un **agente geométrico privilegiado** (features de calzada extraídas de la cámara),
-- tres **agentes de visión pura** entrenados con RL (un frame, cuatro frames apilados, y uno recurrente con LSTM),
+- tres **agentes de visión** entrenados con RL (un frame, cuatro frames apilados, y uno recurrente con LSTM),
 - un **agente de visión destilado** del geométrico por clonación de comportamiento.
 
-Sobre pistas *held-out* y con **randomización del fondo**, el agente destilado **iguala al maestro
-privilegiado** —95.5 % vs 97.0 % de vueltas completadas, sin diferencia estadística (p = 1.000)— y lo
-**supera en tiempo de vuelta**, mientras que entrenar la visión directamente con RL es **inestable**, y
+Todas las variantes reciben además una **lectura propioceptiva de velocidad** (avance y *yaw-rate* del
+cuerpo, del ground-truth del simulador); lo único que cambia entre ellas es **cómo perciben la pista**
+(features explícitas vs imagen cruda). La política de visión es *MultiInput*: NatureCNN sobre la imagen +
+un MLP sobre la velocidad.
+
+Sobre pistas *held-out* y con **randomización del fondo**, el agente destilado **alcanza al maestro
+privilegiado** —95.5 % vs 97.0 % de vueltas completadas, una diferencia pequeña y sin evidencia de
+superioridad de ninguno— y lo **supera en tiempo de vuelta**, mientras que entrenar la visión directamente
+con RL es **inestable**, y
 agregar estructura temporal (stacking, recurrencia) **la empeora**. Mapas de saliencia muestran que la
 destilación **desplaza la atención de la CNN del fondo hacia la calzada**, lo que explica su invarianza al
 entorno.
@@ -35,6 +41,10 @@ Una misma cámara alimenta dos caminos. El **baseline** entrena la visión con R
 recompensa. **Nuestro método** primero entrena un maestro geométrico privilegiado, colecta sus decisiones
 con ruido DART (para cubrir estados de recuperación) y entrena por clonación un estudiante de visión que
 hereda *qué mirar*.
+
+La clonación de comportamiento **cambia la naturaleza del problema**: en vez de optimizar la visión por
+refuerzo desde la recompensa —con su *asignación de crédito* (credit assignment) de alta varianza a través
+de píxeles— resuelve un **aprendizaje supervisado directo** con targets densos, mucho más fácil de optimizar.
 
 ```mermaid
 flowchart LR
@@ -54,15 +64,16 @@ flowchart LR
     class RL,BAD bad;
 ```
 
-### Las cinco representaciones
+### Las representaciones de la observación
 
 | Variante | Régimen | Observación |
 |---|---|---|
-| **Geométrica** | privilegiado (RL) | ~9 features de calzada (road-fraction, offset lateral, heading) + velocidad. Techo de referencia. |
-| **Visión (1 frame)** | visión-RL | CNN sobre un cuadro RGB crudo. La visión pura mínima. |
+| **Geométrica** | privilegiado (RL) | Vector de 9 features de percepción (2 de velocidad + 7 de calzada). Techo de referencia. |
+| **Visión (1 frame)** | visión-RL | CNN sobre un frame RGB crudo. La variante de visión más simple. |
 | **Visión apilada (4)** | visión-RL | Cuatro frames apilados para dar información temporal. |
 | **Visión + LSTM** | visión-RL | Política recurrente: la memoria la aporta el LSTM en vez del stacking. |
 | **Visión destilada** | destilado (BC) | CNN de 1 frame entrenada por clonación para imitar al maestro geométrico. |
+| **Visión solo cámara** *(ablación)* | visión-RL | Igual a *Visión 1 frame* pero **sin** la propiocepción de velocidad: obs = solo imagen. Aísla cuánto aporta esa velocidad de 2D. |
 
 ---
 
@@ -72,17 +83,28 @@ Evaluación sobre **dos pistas held-out** (`track9`, `track10`) con **fondo alea
 evaluación fija (todos los modelos ven exactamente los mismos episodios). Métrica: fracción de vueltas
 completadas. **5 seeds por variante** (25 modelos en total).
 
+Valores: **IQM (media intercuartil) con IC del 95 % por _bootstrap_ de percentil** (2×10⁴ remuestreos)
+sobre 5 seeds, en formato `IQM [IC 95%]`. El tiempo de vuelta se omite (—) en las variantes que rara vez
+completan vueltas.
+
 | Variante | Régimen | Lap rate (%) | Off-track (%) | Tiempo vuelta (s) | Reward/ep |
 |---|---|--:|--:|--:|--:|
-| **Geométrica** | privilegiado (RL) | **97.0 ± 4.1** | 3.0 ± 4.1 | 181 ± 22 | 534 ± 18 |
-| **Visión destilada** | destilado (BC) | **95.5 ± 6.7** | 3.5 ± 4.9 | **161 ± 25** | 482 ± 37 |
-| Visión (1 frame) | visión-RL | 83.5 ± 13.4 | 7.0 ± 5.7 | 197 ± 31 | 406 ± 27 |
-| Visión apilada (4) | visión-RL | 57.5 ± 38.8 | 33.0 ± 33.0 | — | 382 ± 65 |
-| Visión + LSTM | visión-RL | 37.0 ± 36.3 | 51.5 ± 26.2 | — | 284 ± 44 |
+| **Geométrica** | privilegiado (RL) | **98.3** [92.5, 100] | 1.7 [0, 7.5] | 173 [167, 205] | 539 [513, 548] |
+| **Visión destilada** | destilado (BC) | **97.5** [87.5, 100] | 2.5 [0, 9.2] | **154** [145, 188] | 490 [439, 512] |
+| Visión (1 frame) | visión-RL | 88.3 [68.3, 91.7] | 6.7 [1.7, 13.3] | 201 [164, 226] | 406 [380, 435] |
+| Visión apilada (4) | visión-RL | 60.8 [15.8, 96.7] | 28.3 [0.8, 67.5] | — | 365 [335, 460] |
+| Visión + LSTM | visión-RL | 34.2 [1.7, 76.7] | 51.7 [23.3, 78.3] | — | 278 [241, 332] |
+| Visión solo cámara *(ablación)* | visión-RL | *TBD* | *TBD* | *TBD* | *TBD* |
 
-> **La visión destilada es estadísticamente indistinguible del maestro privilegiado** (Mann-Whitney sobre
-> 5 seeds, p = 1.000) — y es **el conductor confiable más rápido**. Recupera la competencia del agente
-> privilegiado desde los píxeles.
+<sub>La fila **Visión solo cámara** es una **ablación en curso** (obs = solo imagen, sin la propiocepción de
+velocidad): mide cuánto aporta esa velocidad de 2D que comparten las demás variantes. Los datos se completan
+al terminar el entrenamiento de sus 5 seeds.</sub>
+
+> **La visión destilada alcanza al maestro privilegiado** en lap rate (IQM 97.5 % vs 98.3 %; +1.5 puntos,
+> con ICs bootstrap del 95 % ampliamente solapados). Un test de equivalencia **TOST a ±5 puntos no es
+> concluyente con n=5** (p<sub>TOST</sub>=0.18): *no detectamos diferencia*, pero con cinco seeds no se
+> puede *demostrar* equivalencia estricta —haría falta un margen práctico de ±8 puntos, o del orden de
+> 20–30 seeds. Con esa cautela, es **el conductor confiable más rápido**.
 
 ![Lap rate held-out por variante](docs/img/fig_eval_lap_rate.png)
 
@@ -98,19 +120,11 @@ otras colapsan. La destilación (y el maestro) rinden parejo en las 5.
 | Visión (1 frame) | 90 | 92 | 60 | 90 | 85 |
 | Visión apilada (4) | 38 | 90 | 5 | 55 | 100 |
 | Visión + LSTM | 5 | 65 | 0 | 32 | 82 |
+| Visión solo cámara *(ablación)* | — | — | — | — | — |
 
-| Comparación | p (Mann-Whitney) | Veredicto |
-|---|--:|---|
-| Geométrica vs Visión destilada | **1.000** | sin diferencia |
-| Geométrica vs Visión (1 frame) | 0.032 | * |
-| Geométrica vs Visión + LSTM | 0.008 | ** |
-| Visión destilada vs Visión + LSTM | 0.008 | ** |
-| Visión destilada vs Visión (1 frame) | 0.079 | marginal |
-| Visión (1 frame) vs Visión + LSTM | 0.032 | * |
-| Visión destilada vs Visión apilada (4) | 0.103 | n.s. |
-| Geométrica vs Visión apilada (4) | 0.127 | n.s. |
-
-<sub>Test exacto de Mann-Whitney, dos colas, sobre lap-rate por seed (n=5). * p&lt;0.05 &nbsp; ** p&lt;0.01 &nbsp; n.s. = no significativo.</sub>
+La enorme varianza de apilada y LSTM (de 5 a 100, de 0 a 82) es el síntoma: la temporalidad agrega
+**dificultad de optimización**, no desempeño. La equivalencia Geométrica–Destilada se evalúa con el **TOST**
+de arriba (no con Mann-Whitney: un *p* alto no prueba igualdad).
 
 ---
 
@@ -122,7 +136,7 @@ saliencia corresponde exactamente a la imagen mostrada (no es un promedio).
 
 ![Saliencia de las cuatro variantes de visión](docs/img/fig_saliency.png)
 
-**Las tres variantes RL puras** (1 frame, stacked, LSTM) encienden la saliencia en una **franja sobre el
+**Las tres variantes de visión-RL** (1 frame, stacked, LSTM) encienden la saliencia en una **franja sobre el
 horizonte** —el muro y las montañas del fondo—: usan el entorno, constante en entrenamiento, como atajo.
 **La destilada** desplaza la atención hacia **abajo, sobre la calzada y el borde curvo del carril**, con el
 horizonte apagado: hereda del maestro geométrico *qué mirar*. Por eso se sostiene bajo randomización del
@@ -141,7 +155,8 @@ el geométrico converge parejo. La destilada es supervisada (no aparece en estas
 
 ## Setup experimental
 
-Las cinco variantes comparten todo salvo la observación. Hiperparámetros reales de los runs finales
+Las cinco variantes comparten todo salvo la observación. Adoptamos **PPO** por su estabilidad y eficiencia
+demostradas en control continuo y navegación autónoma. Hiperparámetros reales de los runs finales
 (`models/<id>/run_metadata.json`):
 
 **PPO (las cuatro variantes RL)**
@@ -175,9 +190,10 @@ Las cinco variantes comparten todo salvo la observación. Hiperparámetros reale
 | | |
 |---|---|
 | Simulador | Webots R2025a · Stable-Baselines3 / sb3-contrib |
-| Observación (visión) | Imagen RGB 84 × 84 × 3 (× n_stack) |
-| Observación (geométrica) | ≈ 9 features de calzada + velocidad |
-| Acción | Box continuo (steer, throttle) |
+| Observación (visión) | Imagen RGB 84 × 84 × 3 (× n_stack) **+ velocidad propioceptiva [avance, yaw-rate]** |
+| Observación (geométrica) | 9 features de percepción (2 de velocidad + 7 de calzada) |
+| Ablación *camera-only* | Obs = **solo la imagen** (sin la velocidad); misma CNN, sin la rama de velocidad |
+| Acción | Box continuo: velocidades de las 2 ruedas (tracción diferencial), remapeadas a `[v_min, v_max]` rad/s |
 | Reward | Progreso sobre la pista − penalizaciones (compartido) |
 | Randomización de dominio | Textura de pared + skybox rotadas por episodio |
 | Evaluación | 2 pistas held-out · 20 ep/pista · fondo aleatorio · `--eval-seed 0` |
@@ -198,6 +214,9 @@ python -m rl.trainer --total-timesteps 1000000 --n-stack 1 --n-envs 4 --n-steps 
 # 3. Entrenar TODAS las variantes/seeds y evaluarlas (switch de rama automático)
 python run_full_pipeline.py            # train (5 variantes × seeds) + eval de esas mismas seeds
 
+# 3b. Ablación camera-only (obs = SOLO imagen, sin propiocepción) — en master
+python -m rl.run_experiment --seeds 0 1 2 3 4 --total-timesteps 1000000 --n-stack 1 --n-envs 4 --n-steps 256 --episodes 20 --camera-only
+
 # 4. Destilación apareada geométrico → visión  (checkout vision_distill primero)
 git checkout vision_distill
 python run_all_distill.py --seeds 0 1 2 3 4        # colecta (limpio+DART) + BC por seed
@@ -212,15 +231,20 @@ python run_all_evals.py --discover --episodes 20 --randomize-background --eval-s
 > `run_all_*` / `run_full_pipeline` hacen el `git checkout` por vos; corré siempre con el working tree limpio.
 
 Cada corrida genera `models/<timestamp>/` con `final_model.zip`, `vecnormalize.pkl`, `tensorboard/` y
-`run_metadata.json`. El análisis de las evals y las figuras se generan desde `analysis/`.
+`run_metadata.json`. El análisis se corre desde `analysis/`:
+
+```powershell
+python -m analysis.run_analysis      # descubre runs + results_summary.{json,md} + curvas
+python -m analysis.robust_stats      # IQM [IC 95% bootstrap] + TOST (incluye la ablación camera-only)
+```
 
 ---
 
 ## Conclusiones
 
 - Un agente **privilegiado** con percepción limpia de la calzada resuelve la tarea (97 %).
-- **Destilarlo a visión pura** recupera ese desempeño sin pérdida significativa (95.5 %, p = 1.0) y con
-  mejor tiempo de vuelta — el estudiante de píxeles le gana la vuelta al maestro.
+- **Destilarlo a un agente de visión** recupera ese desempeño (95.5 %; una diferencia de 1.5 puntos, sin
+  evidencia de superioridad de ninguno) y con mejor tiempo de vuelta — el estudiante de píxeles le gana la vuelta al maestro.
 - Entrenar la **misma visión con RL directo** es poco confiable, y **la temporalidad la empeora**: stacking
   y recurrencia desestabilizan la optimización (KL disparado, crítico colapsado) en vez de ayudar.
 - **Lectura:** el límite de la visión-RL no es la *capacidad* de la representación, sino la *asignación de
@@ -230,7 +254,10 @@ Cada corrida genera `models/<timestamp>/` con `final_model.zip`, `vecnormalize.p
 ## Limitaciones
 
 - **Solo simulación** — no evaluamos transferencia a hardware real; el maestro usa features extraídas en el
-  simulador, que en el mundo real habría que estimar con percepción.
+  simulador, que en el mundo real habría que estimar con percepción. *Dicho esto*, la saliencia sugiere una
+  hipótesis optimista para **sim-to-real**: como la destilada aprendió a mirar la calzada e ignorar el fondo
+  (justo lo que la randomización vuelve inservible), es mejor candidata a transferencia que la visión-RL
+  directa, que colapsaría al desaparecer el fondo específico de Webots.
 - **Familia de pistas acotada** — dos pistas held-out de la misma distribución de arena.
 - **Randomización de dominio parcial** — varía pared y skybox, no geometría, iluminación ni cámara.
 - **El estudiante hereda el techo del maestro** — el BC no puede superar la política del geométrico (la
@@ -254,7 +281,7 @@ Cada corrida genera `models/<timestamp>/` con `final_model.zip`, `vecnormalize.p
 Tres procesos que se comunican por socket:
 
 - **`controllers/agent_controller/`** — corre en el robot (cámara + ruedas). Aplica acciones y devuelve la observación sensorial.
-- **`controllers/supervisor_controller/`** — servidor del environment: atiende `reset_env` / `step_env`, avanza la simulación, calcula el reward (visión-pura) y aplica la randomización de dominio del fondo.
+- **`controllers/supervisor_controller/`** — servidor del environment: atiende `reset_env` / `step_env`, avanza la simulación, calcula el reward (desde la cámara) y aplica la randomización de dominio del fondo.
 - **`rl/`** — el lado de entrenamiento. `NavEnv` (Gymnasium) habla con el supervisor por TCP; `trainer.py` arma PPO con `VecNormalize` + `VecFrameStack`. `distill.py` hace la clonación; `evaluate.py` corre las evals.
 
 ```

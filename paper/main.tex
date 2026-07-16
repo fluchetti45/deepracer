@@ -17,6 +17,7 @@
 \usepackage[hidelinks]{hyperref}
 \usepackage{dblfloatfix} % permite ubicar figure*/table* al pie y ordena mejor los floats anchos
 \usepackage{placeins}    % \FloatBarrier para que las figuras salgan antes de las Referencias
+\usepackage{float}       % [H] para fijar tablas/figuras de una columna en el texto
 
 % --- paleta (misma que la pagina web del proyecto) ---
 \definecolor{teal}{HTML}{0E8C79}
@@ -26,6 +27,9 @@
 \definecolor{badink}{HTML}{A34428}
 
 \renewcommand{\arraystretch}{1.15}
+
+% babel-spanish rotula las tablas como "Cuadro"; lo forzamos a "Tabla".
+\addto\captionsspanish{\renewcommand{\tablename}{Tabla}}
 
 % --- dar mas lugar a los floats para que no se apilen despues de las referencias ---
 \renewcommand{\topfraction}{0.92}
@@ -43,25 +47,30 @@
 \title{De la percepci\'on privilegiada a los p\'ixeles:\\
 destilaci\'on de pol\'iticas para conducci\'on aut\'onoma en simulaci\'on}
 
-\author{\IEEEauthorblockN{Faustino Luchetti}
-\IEEEauthorblockA{Proyecto de tesis\\
-Universidad\\
-fluchetti45@gmail.com}}
+%%\author{\IEEEauthorblockN{Faustino Luchetti}
+%%\IEEEauthorblockA{Proyecto de tesis\\
+%%Universidad\\
+%%fluchetti45@gmail.com}}
 
 \maketitle
+% IEEEtran usa \flushbottom (estira las columnas para igualar el alto, lo que abre
+% huecos grandes alrededor de titulos cuando hay floats [H] rigidos). \raggedbottom
+% deja que cada columna termine naturalmente, sin esos espacios.
+\raggedbottom
 
 \begin{abstract}
 Comparamos cinco representaciones de la observaci\'on para un agente de conducci\'on
-aut\'onoma estilo AWS DeepRacer, entrenado con PPO en el simulador Webots. Manteniendo
+aut\'onoma entrenado con PPO en el simulador Webots. Manteniendo
 \emph{id\'enticos} el entorno, la recompensa, el presupuesto de entrenamiento (1M de pasos)
 y la configuraci\'on del algoritmo, variamos \'unicamente la observaci\'on: un agente
 geom\'etrico \emph{privilegiado} (features de calzada extra\'idas de la c\'amara), tres
-agentes de visi\'on pura entrenados con RL (un cuadro, cuatro cuadros apilados, y una
+agentes de visi\'on entrenados con RL (un frame, cuatro frames apilados, y una
 pol\'itica recurrente con LSTM), y un agente de visi\'on \emph{destilado} del geom\'etrico
 por clonaci\'on de comportamiento. Sobre pistas no vistas y con randomizaci\'on del fondo,
-el agente destilado \textbf{iguala al maestro privilegiado} ---$95.5\%$ frente a $97.0\%$
-de vueltas completadas, sin diferencia estad\'istica ($p = 1.000$)--- y lo \textbf{supera en
-tiempo de vuelta}, mientras que entrenar la visi\'on directamente con RL es inestable y
+el agente destilado \textbf{alcanza al maestro privilegiado} ---$95.5\%$ frente a $97.0\%$
+de vueltas completadas, una diferencia peque\~na y sin evidencia de superioridad de ninguno--- y
+lo \textbf{supera en tiempo de vuelta}, mientras que entrenar la visi\'on directamente con RL es
+inestable y
 agregar estructura temporal (apilado, recurrencia) \emph{empeora} el desempe\~no. Mapas de
 saliencia por \emph{guided backprop} muestran que la destilaci\'on desplaza la atenci\'on de
 la CNN del fondo hacia la calzada, lo que explica su invarianza al entorno. Concluimos que el
@@ -77,8 +86,9 @@ conducci\'on aut\'onoma, aprendizaje privilegiado, randomizaci\'on de dominio
 
 \section{Introducci\'on}
 Un agente de conducci\'on aut\'onoma que percibe el mundo \emph{solo} a trav\'es de una
-c\'amara enfrenta un problema doblemente dif\'icil: la observaci\'on es \emph{parcial}
----un cuadro no informa la velocidad ni hacia d\'onde gira la escena--- y la se\~nal de
+c\'amara enfrenta un problema doblemente dif\'icil: la observaci\'on visual es \emph{parcial}
+---un frame congela la escena: no muestra qu\'e hay tras la pr\'oxima curva ni c\'omo evoluciona
+el entorno--- y la se\~nal de
 aprendizaje es \emph{escasa}, la recompensa por avanzar en pista. En este r\'egimen, una red
 convolucional entrenada con RL tiende a encontrar un \emph{atajo}: se aferra a la textura del
 fondo (la pared y el horizonte de la arena), que es constante durante el entrenamiento pero
@@ -92,8 +102,8 @@ la recompensa, el estudiante de visi\'on imita las decisiones de un maestro que 
 calzada de forma limpia ---heredando \emph{qu\'e mirar}--- siguiendo la l\'inea de
 \emph{Learning by Cheating}~\cite{chen2019lbc}.
 
-Nuestra contribuci\'on es un estudio controlado, con $5$ semillas por condici\'on ($25$
-modelos en total), que aisla el efecto de la \emph{representaci\'on de la observaci\'on}
+Nuestra contribuci\'on es un estudio controlado, con $5$ seeds por modelo ($25$
+modelos en total), que aisla el efecto de la \emph{representaci\'on de la observaci\'on},
 dejando todo lo dem\'as fijo. Mostramos que (i) la visi\'on destilada iguala
 estad\'isticamente al maestro privilegiado; (ii) la visi\'on-RL directa es poco confiable y la
 temporalidad la empeora; y (iii) la saliencia confirma que la ventaja es de invarianza al
@@ -113,12 +123,14 @@ PPO~\cite{schulman2017ppo} y el extractor visual es la NatureCNN~\cite{mnih2015d
 escenario est\'a inspirado en la plataforma AWS DeepRacer~\cite{balaji2020deepracer}.
 
 \section{M\'etodo}
-Las cinco variantes comparten entorno, recompensa, presupuesto ($10^6$ pasos) y configuraci\'on
+Las cinco variantes comparten entorno, recompensa, presupuesto ($10M$ pasos) y configuraci\'on
 de PPO; \textbf{lo \'unico que cambia es la observaci\'on} (Tabla~\ref{tab:variants}). La
-acci\'on es un vector continuo $(\text{steer}, \text{throttle})$ y la recompensa es densa:
-progreso sobre la pista menos penalizaciones, computada desde la misma imagen de c\'amara.
+acci\'on es un vector continuo de dos componentes ---las velocidades normalizadas de las ruedas
+izquierda y derecha (tracci\'on diferencial), cada una remapeada a $[v_{\min}, v_{\max}]$ rad/s---
+y la recompensa es densa: progreso sobre la pista menos penalizaciones, computada desde la misma
+imagen de c\'amara.
 
-\begin{table}[t]
+\begin{table}[H]
 \caption{Las cinco representaciones de la observaci\'on.}
 \label{tab:variants}
 \centering
@@ -127,11 +139,11 @@ progreso sobre la pista menos penalizaciones, computada desde la misma imagen de
 \toprule
 \textbf{Variante} & \textbf{R\'egimen} & \textbf{Observaci\'on} \\
 \midrule
-Geom\'etrica & privilegiado & $\sim$9 features de calzada (road-fraction, offset lateral, heading) + velocidad. Techo de referencia. \\
-Visi\'on 1 cuadro & visi\'on-RL & CNN sobre un cuadro RGB crudo. La visi\'on pura m\'inima. \\
-Visi\'on apilada & visi\'on-RL & Cuatro cuadros apilados para dar informaci\'on temporal. \\
+Geom\'etrica & privilegiado & Vector de 9 features de percepci\'on. \\
+Visi\'on 1 frame & visi\'on-RL & CNN sobre un frame RGB crudo. La variante de visi\'on m\'as simple. \\
+Visi\'on apilada & visi\'on-RL & Cuatro frames apilados para dar informaci\'on temporal. \\
 Visi\'on + LSTM & visi\'on-RL & Pol\'itica recurrente: la memoria la aporta el LSTM. \\
-Visi\'on destilada & destilado (BC) & CNN de 1 cuadro entrenada por clonaci\'on para imitar al maestro geom\'etrico. \\
+Visi\'on destilada & destilado (BC) & CNN de 1 frame entrenada por clonaci\'on para imitar al maestro geom\'etrico. \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -141,12 +153,17 @@ Una misma c\'amara alimenta dos caminos (Fig.~\ref{fig:pipeline}). El \emph{base
 la visi\'on con RL directo desde la recompensa. \emph{Nuestro m\'etodo} primero entrena un
 maestro geom\'etrico privilegiado, colecta sus decisiones con ruido DART y entrena por
 clonaci\'on (MSE sobre la acci\'on) un estudiante de visi\'on que hereda \emph{qu\'e mirar}.
-El estudiante usa \emph{exactamente} la misma arquitectura (NatureCNN, 1 cuadro) que la
-variante Visi\'on 1 cuadro, de modo que la \'unica diferencia es el \emph{r\'egimen de
+La clonaci\'on de comportamiento \textbf{cambia la naturaleza del problema}: en lugar de optimizar
+la visi\'on por refuerzo desde la recompensa ---con su \emph{asignaci\'on de cr\'edito}
+(\emph{credit assignment}) de alta varianza a trav\'es de p\'ixeles--- resuelve un aprendizaje
+\emph{supervisado} directo con targets densos, mucho m\'as f\'acil de optimizar.
+El estudiante usa \emph{exactamente} la misma arquitectura (NatureCNN, 1 frame) que la
+variante Visi\'on 1 frame, de modo que la \'unica diferencia es el \emph{r\'egimen de
 entrenamiento}.
 
-\begin{figure}[t]
+\begin{figure}[H]
 \centering
+\resizebox{\columnwidth}{!}{%
 \begin{tikzpicture}[
   font=\scriptsize,
   box/.style={rectangle, rounded corners=2pt, draw, minimum height=8mm,
@@ -173,7 +190,8 @@ entrenamiento}.
   \draw[ar] (bc) -- (out);
   \draw[arb] (cam.east) to[out=-20,in=180] (rl.west);
   \draw[arb] (rl) -- (badn);
-\end{tikzpicture}
+\end{tikzpicture}%
+}
 \caption{El pipeline. Una c\'amara alimenta dos caminos: arriba, nuestro m\'etodo
 (maestro geom\'etrico privilegiado $\rightarrow$ colecta con DART $\rightarrow$ clonaci\'on a
 un estudiante de visi\'on); abajo, el baseline de visi\'on-RL directo, que sobreajusta el
@@ -184,16 +202,33 @@ fondo.}
 \section{Setup experimental}
 \label{sec:setup}
 El simulador es Webots R2025a y el agente se implementa sobre Stable-Baselines3
-(PPO)~\cite{schulman2017ppo} y sb3-contrib (RecurrentPPO). La observaci\'on de visi\'on es una
-imagen RGB $84\times84\times3$ (multiplicada por el n\'umero de cuadros apilados); la
-observaci\'on geom\'etrica es un vector de $\sim$9 features de calzada m\'as la velocidad. La
+(PPO)~\cite{schulman2017ppo} y sb3-contrib (RecurrentPPO). Adoptamos PPO como algoritmo base por su
+estabilidad y eficiencia demostradas en control continuo y navegaci\'on aut\'onoma. La observaci\'on
+de visi\'on combina una imagen RGB $84\times84\times3$ (multiplicada por el n\'umero de frames
+apilados) con una lectura \emph{propioceptiva} de velocidad del cuerpo (\emph{forward} y
+\emph{yaw-rate}, tomada del ground-truth del simulador); la observaci\'on geom\'etrica reemplaza la
+imagen por un vector de 9 features de percepci\'on ---esas mismas 2 de velocidad m\'as 7 de calzada
+(road-fraction, verde central y 5 offsets laterales de look-ahead). As\'i, \textbf{todas las
+variantes comparten la velocidad propioceptiva}; lo \'unico que cambia es c\'omo perciben la pista
+(imagen cruda vs.\ features expl\'icitas). La pol\'itica de visi\'on es en consecuencia
+\emph{MultiInput}: una NatureCNN sobre la imagen y un MLP sobre la velocidad. La
 randomizaci\'on de dominio rota la textura de la pared y el \emph{skybox} por episodio. La
-evaluaci\'on usa dos pistas no vistas (\texttt{track9}, \texttt{track10}), $20$ episodios por
-pista, con fondo aleatorio y semilla de reinicio fija (\texttt{eval-seed 0}) para que todos los
-modelos vean exactamente la misma secuencia de episodios. Las tablas~\ref{tab:ppo}
+evaluaci\'on usa dos pistas no vistas (\texttt{track9}, \texttt{track10}; Fig.~\ref{fig:tracks}),
+$20$ episodios por pista, con fondo aleatorio y seed de reinicio fija (\texttt{eval-seed 0}) para
+que todos los modelos vean exactamente la misma secuencia de episodios. Las tablas~\ref{tab:ppo}
 y~\ref{tab:distill} listan los hiperpar\'ametros reales de los runs finales.
 
-\begin{table}[t]
+\begin{figure}[H]
+\centering
+\includegraphics[width=\columnwidth]{figures/fig_tracks.png}
+\caption{Pistas del estudio (mapas top-down: verde\,=\,fuera de pista, asfalto negro, l\'inea de
+centro amarilla). \textbf{Arriba}: tres de las ocho pistas de \emph{entrenamiento} (una por episodio,
+con fondo aleatorio). \textbf{Abajo}: las dos pistas de \emph{evaluaci\'on} ---no vistas en
+entrenamiento--- de la misma distribuci\'on pero con curvas m\'as cerradas.}
+\label{fig:tracks}
+\end{figure}
+
+\begin{table}[H]
 \caption{Hiperpar\'ametros de PPO (las cuatro variantes RL).}
 \label{tab:ppo}
 \centering
@@ -209,12 +244,12 @@ Batch $\cdot$ \'Epocas & $128 \cdot 5$ \\
 Learning rate & $5\times10^{-4}$ \\
 $\gamma \cdot$ clip $\cdot$ ent $\cdot$ vf & $0.995 \cdot 0.2 \cdot 0.02 \cdot 0.5$ \\
 Normalizaci\'on & VecNormalize (reward) \\
-Semillas & $0,1,2,3,4$ \\
+Seeds & $0,1,2,3,4$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\begin{table}[t]
+\begin{table}[H]
 \caption{Hiperpar\'ametros de la destilaci\'on (clonaci\'on de comportamiento).}
 \label{tab:distill}
 \centering
@@ -222,11 +257,11 @@ Semillas & $0,1,2,3,4$ \\
 \begin{tabular}{@{}ll@{}}
 \toprule
 Objetivo & Clonaci\'on de comportamiento (MSE) \\
-Maestro & Geom\'etrico, misma semilla que el alumno \\
+Maestro & Geom\'etrico, misma seed que el alumno \\
 Colecta & Apareada: limpia ($\sigma{=}0$) + DART ($\sigma{=}0.15$) \\
-Pares $(s,a)$ & $\sim$55\,000 por semilla \\
+Pares $(s,a)$ & $\sim$55\,000 por seed \\
 \'Epocas $\cdot$ LR & $30 \cdot 3\times10^{-4}$ \\
-Backbone & NatureCNN, 1 cuadro \\
+Backbone & NatureCNN, 1 frame \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -237,48 +272,68 @@ m\'etrica principal es la fracci\'on de vueltas completadas (\emph{lap rate}). L
 Tabla~\ref{tab:main} resume el desempe\~no medio y la Fig.~\ref{fig:eval} lo grafica.
 
 \begin{table*}[t]
-\caption{Desempe\~no en pistas no vistas con fondo aleatorio (media $\pm$ desv\'io sobre $5$
-semillas). Filas resaltadas: agentes que resuelven la tarea.}
+\caption{Desempe\~no en pistas no vistas (fondo aleatorio), agregado sobre las $5$ seeds de cada
+variante. Cada columna num\'erica reporta \textbf{IQM\,[IC\,$95\%$]}: la \emph{media intercuartil} ---promedia el
+$50\%$ central de las seeds, descartando el $25\%$ mejor y el $25\%$ peor; m\'as robusta que la
+media simple frente a seeds que colapsan--- seguida, entre corchetes, de su \emph{intervalo de
+confianza del $95\%$} estimado por \emph{bootstrap} de percentil ($2\times10^{4}$ remuestreos).
+En \emph{lap rate} y \emph{reward} m\'as alto es mejor; en \emph{off-track} y \emph{tiempo de
+vuelta}, m\'as bajo. Filas resaltadas: las dos variantes que resuelven la tarea. El tiempo de
+vuelta se omite (---) donde casi no se completan vueltas.}
 \label{tab:main}
 \centering
-\begin{tabular}{@{}llrrrr@{}}
+\footnotesize
+\begin{tabular}{@{}llcccc@{}}
 \toprule
 \textbf{Variante} & \textbf{R\'egimen} & \textbf{Lap rate (\%)} & \textbf{Off-track (\%)} & \textbf{Tiempo vuelta (s)} & \textbf{Reward/ep} \\
 \midrule
-\rowcolor{goodbg} Geom\'etrica       & privilegiado (RL) & $\mathbf{97.0} \pm 4.1$  & $3.0 \pm 4.1$   & $181 \pm 22$ & $534 \pm 18$ \\
-\rowcolor{goodbg} Visi\'on destilada & destilado (BC)     & $\mathbf{95.5} \pm 6.7$  & $3.5 \pm 4.9$   & $\mathbf{161} \pm 25$ & $482 \pm 37$ \\
-Visi\'on 1 cuadro  & visi\'on-RL & $83.5 \pm 13.4$ & $7.0 \pm 5.7$   & $197 \pm 31$ & $406 \pm 27$ \\
-Visi\'on apilada   & visi\'on-RL & $57.5 \pm 38.8$ & $33.0 \pm 33.0$ & ---          & $382 \pm 65$ \\
-Visi\'on + LSTM    & visi\'on-RL & $37.0 \pm 36.3$ & $51.5 \pm 26.2$ & ---          & $284 \pm 44$ \\
+\rowcolor{goodbg} Geom\'etrica       & privilegiado (RL) & $\mathbf{98.3}\,[92.5,100]$ & $1.7\,[0,7.5]$   & $173\,[167,205]$          & $539\,[513,548]$ \\
+\rowcolor{goodbg} Visi\'on destilada & destilado (BC)     & $\mathbf{97.5}\,[87.5,100]$ & $2.5\,[0,9.2]$   & $\mathbf{154}\,[145,188]$ & $490\,[439,512]$ \\
+Visi\'on 1 frame  & visi\'on-RL & $88.3\,[68.3,91.7]$ & $6.7\,[1.7,13.3]$  & $201\,[164,226]$ & $406\,[380,435]$ \\
+Visi\'on apilada   & visi\'on-RL & $60.8\,[15.8,96.7]$ & $28.3\,[0.8,67.5]$ & ---              & $365\,[335,460]$ \\
+Visi\'on + LSTM    & visi\'on-RL & $34.2\,[1.7,76.7]$  & $51.7\,[23.3,78.3]$ & ---             & $278\,[241,332]$ \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-\begin{figure}[t]
+\begin{figure}[H]
 \centering
 \includegraphics[width=\linewidth]{figures/fig_eval_lap_rate.png}
-\caption{Lap rate en pistas no vistas por variante ($5$ semillas, fondo aleatorio). La
+\caption{Lap rate en pistas no vistas por variante ($5$ seeds, fondo aleatorio). La
 geom\'etrica y la destilada quedan arriba y con barras angostas; la visi\'on-RL cae y, sobre
 todo, se vuelve \emph{inestable}.}
 \label{fig:eval}
 \end{figure}
 
-El hallazgo central: la \textbf{visi\'on destilada es estad\'isticamente indistinguible del
-maestro privilegiado} (Tabla~\ref{tab:sig}, $p = 1.000$ por Mann-Whitney exacto de dos colas
-sobre $5$ semillas), y adem\'as es el \emph{conductor confiable m\'as r\'apido}: recupera la
-competencia del agente privilegiado partiendo solo de p\'ixeles.
+El hallazgo central: la \textbf{visi\'on destilada alcanza al maestro privilegiado}. La media de
+vueltas completadas es $95.5\%$ frente a $97.0\%$ (IQM $97.5\%$ vs.\ $98.3\%$; una diferencia de
+apenas $1.5$ puntos), con intervalos de confianza \emph{bootstrap} del $95\%$ ampliamente
+solapados (Tabla~\ref{tab:main}). Ahora bien, que dos intervalos se solapen no \emph{demuestra}
+que las variantes sean equivalentes; para evaluarlo de forma directa aplicamos un TOST
+(\emph{two one-sided tests}) sobre el lap rate
+por seed, con un margen de equivalencia pre-especificado de $\pm5$ puntos: con $n{=}5$ el test
+\textbf{no llega a declarar equivalencia} ($p_{\text{TOST}}=0.18$; IC del $90\%$ de la diferencia
+$[-5.2,\,+8.2]$ puntos), lo que refleja el \emph{escaso poder de cinco seeds} m\'as que una
+diferencia real: un an\'alisis de varianza muestra que el $60$--$80\%$ de la dispersi\'on es
+variabilidad \emph{entre seeds} (irreducible con m\'as episodios de evaluaci\'on), de modo que
+la equivalencia estricta solo quedar\'ia establecida bajo un margen pr\'actico m\'as laxo
+($\pm8$ puntos) o con del orden de $20$--$30$ seeds por condici\'on. En s\'intesis: no
+detectamos una diferencia y el efecto es peque\~no, pero \emph{no afirmamos equivalencia estricta}
+a $\pm5$ puntos. Con esa cautela, la destilada es adem\'as el \emph{conductor confiable m\'as
+r\'apido}: recupera la competencia del agente privilegiado partiendo solo de p\'ixeles.
 
 \subsection{La visi\'on-RL es una loter\'ia; la destilaci\'on, no}
-El promedio esconde lo esencial. La Tabla~\ref{tab:seed} muestra el lap rate por semilla: las
-variantes temporales son \textbf{bimodales} ---algunas semillas convergen y otras colapsan
+El promedio esconde lo esencial. La Tabla~\ref{tab:seed} muestra el lap rate por seed: las
+variantes temporales son \textbf{bimodales} ---algunas seeds convergen y otras colapsan
 (de $5$ a $100$, de $0$ a $82$)--- mientras que el maestro y la destilada rinden parejo en las
 cinco. La enorme varianza de apilada y LSTM es el s\'intoma: la temporalidad agrega
 \emph{dificultad de optimizaci\'on}, no desempe\~no. Diagn\'osticos de entrenamiento
 (divergencia de KL, \emph{explained variance} negativa del cr\'itico) confirman una
-optimizaci\'on inestable.
+optimizaci\'on inestable. Las curvas de entrenamiento (Fig.~\ref{fig:curves}) lo hacen visible:
+la visi\'on-RL aprende m\'as lento y con bandas m\'as anchas que el maestro.
 
-\begin{table}[t]
-\caption{Lap rate (\%) por semilla. Verde $\geq 85$, rojo $< 50$.}
+\begin{table}[H]
+\caption{Lap rate (\%) por seed. Verde $\geq 85$, rojo $< 50$.}
 \label{tab:seed}
 \centering
 \small
@@ -288,88 +343,68 @@ optimizaci\'on inestable.
 \midrule
 Geom\'etrica       & \cellcolor{goodbg}100 & \cellcolor{goodbg}98 & \cellcolor{goodbg}98 & \cellcolor{goodbg}90 & \cellcolor{goodbg}100 \\
 Visi\'on destilada & \cellcolor{goodbg}100 & \cellcolor{goodbg}92 & \cellcolor{goodbg}100 & \cellcolor{goodbg}100 & \cellcolor{goodbg}85 \\
-Visi\'on 1 cuadro  & \cellcolor{goodbg}90 & \cellcolor{goodbg}92 & 60 & \cellcolor{goodbg}90 & \cellcolor{goodbg}85 \\
+Visi\'on 1 frame  & \cellcolor{goodbg}90 & \cellcolor{goodbg}92 & 60 & \cellcolor{goodbg}90 & \cellcolor{goodbg}85 \\
 Visi\'on apilada   & \cellcolor{badbg}38 & \cellcolor{goodbg}90 & \cellcolor{badbg}5 & 55 & \cellcolor{goodbg}100 \\
 Visi\'on + LSTM    & \cellcolor{badbg}5 & 65 & \cellcolor{badbg}0 & \cellcolor{badbg}32 & 82 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\begin{table}[t]
-\caption{Significancia (Mann-Whitney exacto, dos colas, sobre lap rate por semilla, $n{=}5$).
-$^{*}\,p<0.05$; $^{**}\,p<0.01$; n.s.\ = no significativo.}
-\label{tab:sig}
+\begin{figure}[H]
 \centering
-\small
-\begin{tabular}{@{}lrl@{}}
-\toprule
-\textbf{Comparaci\'on} & \textbf{$p$} & \textbf{Veredicto} \\
-\midrule
-\rowcolor{goodbg} Geom\'etrica vs Destilada       & $1.000$ & sin diferencia \\
-Geom\'etrica vs 1 cuadro          & $0.032$ & $^{*}$ \\
-Geom\'etrica vs LSTM              & $0.008$ & $^{**}$ \\
-Destilada vs LSTM                 & $0.008$ & $^{**}$ \\
-Destilada vs 1 cuadro             & $0.079$ & marginal \\
-1 cuadro vs LSTM                  & $0.032$ & $^{*}$ \\
-Destilada vs apilada              & $0.103$ & n.s. \\
-Geom\'etrica vs apilada           & $0.127$ & n.s. \\
-\bottomrule
-\end{tabular}
-\end{table}
+\includegraphics[width=0.49\linewidth]{figures/fig_reward.png}\hfill
+\includegraphics[width=0.49\linewidth]{figures/fig_lap_rate.png}
+\caption{Curvas de entrenamiento de las variantes RL ($5$ seeds, banda $=\pm$ desv\'io).
+Izquierda: reward por episodio. Derecha: lap rate en pistas no vistas durante el entrenamiento.
+La destilada es supervisada y no aparece en estas curvas de RL.}
+\label{fig:curves}
+\end{figure}
 
 \section{An\'alisis: qu\'e mira la CNN}
 Para entender \emph{por qu\'e} la destilaci\'on funciona, calculamos saliencia por
 \emph{guided backprop}~\cite{springenberg2015guided}: el gradiente de la decisi\'on (valor del
 cr\'itico $V(s)$ y \emph{steering}) respecto de los p\'ixeles de entrada. Crucialmente, la
-saliencia se computa \textbf{sobre el mismo cuadro que se muestra} ---una curva--- y no como un
-promedio sobre cuadros distintos, que mezclar\'ia rectas y curvas. La Fig.~\ref{fig:saliency}
-compara las cuatro variantes de visi\'on (todas semilla $0$).
+saliencia se computa \textbf{sobre el mismo frame que se muestra} ---una curva--- y no como un
+promedio sobre frames distintos, que mezclar\'ia rectas y curvas. La Fig.~\ref{fig:saliency}
+compara las cuatro variantes de visi\'on (todas seed $0$).
 
-\begin{figure*}[t]
+\begin{figure}[H]
 \centering
-\includegraphics[width=0.72\textwidth]{figures/fig_saliency.png}
+\includegraphics[width=\columnwidth]{figures/fig_saliency.png}
 \caption{Saliencia por \emph{guided backprop} sobre una misma curva. Las tres variantes
-RL puras (1 cuadro, apilada, LSTM) encienden la saliencia en una franja sobre el
+de visi\'on-RL (1 frame, apilada, LSTM) encienden la saliencia en una franja sobre el
 \textbf{horizonte} ---la pared y las monta\~nas del fondo---: usan el entorno, constante en
 entrenamiento, como atajo. La \textbf{destilada} desplaza la atenci\'on hacia \emph{abajo},
 sobre la calzada y el borde curvo del carril, con el horizonte apagado: hereda del maestro
 geom\'etrico \emph{qu\'e mirar}. Dentro de cada modelo, \emph{value} y \emph{steer} coinciden
 porque comparten el extractor CNN.}
 \label{fig:saliency}
-\end{figure*}
+\end{figure}
 
 La lectura es directa: la visi\'on-RL directa se apoya en el fondo, que correlaciona con la
 direcci\'on del giro en el set de entrenamiento pero desaparece bajo randomizaci\'on; la
-destilaci\'on \emph{decorrelaciona} la pol\'itica del fondo, y por eso se sostiene. La
-Fig.~\ref{fig:curves} muestra adem\'as que la visi\'on-RL aprende m\'as lento y con bandas
-m\'as anchas que el maestro.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=0.49\linewidth]{figures/fig_reward.png}\hfill
-\includegraphics[width=0.49\linewidth]{figures/fig_lap_rate.png}
-\caption{Curvas de entrenamiento de las variantes RL ($5$ semillas, banda $=\pm$ desv\'io).
-Izquierda: reward por episodio. Derecha: lap rate en pistas no vistas durante el entrenamiento.
-La destilada es supervisada y no aparece en estas curvas de RL.}
-\label{fig:curves}
-\end{figure}
+destilaci\'on \emph{decorrelaciona} la pol\'itica del fondo, y por eso se sostiene.
 
 \section{Limitaciones}
 El estudio es \textbf{solo en simulaci\'on}: no evaluamos transferencia a hardware real, y el
 maestro usa features extra\'idas dentro del simulador que en el mundo real habr\'ia que estimar
-con percepci\'on ---el problema dif\'icil. La \textbf{familia de pistas es acotada} (dos pistas
-no vistas de la misma distribuci\'on) y la \textbf{randomizaci\'on de dominio es parcial}
+con percepci\'on ---el problema dif\'icil. Dicho esto, la saliencia sugiere una hip\'otesis
+\emph{optimista} sobre la transferencia: como el estudiante destilado aprendi\'o a \emph{mirar la
+calzada e ignorar el fondo} ---justo lo que la randomizaci\'on vuelve inservible---, es un candidato
+mucho m\'as prometedor para \emph{sim-to-real} que la visi\'on-RL directa, que colapsar\'ia al
+desaparecer el fondo espec\'ifico de Webots del que depende. La \textbf{familia de pistas es
+acotada} (dos pistas no vistas de la misma distribuci\'on) y la \textbf{randomizaci\'on de dominio es parcial}
 (var\'ia pared y skybox, no geometr\'ia, iluminaci\'on ni c\'amara), de modo que cierra
 \emph{este} atajo y no todos los posibles. Por construcci\'on, el \textbf{estudiante hereda el
 techo del maestro}: la mejora en tiempo de vuelta proviene de acciones m\'as suaves, no de una
 pol\'itica estrictamente superior. Finalmente, la bimodalidad de la visi\'on-RL sugiere alta
-\textbf{sensibilidad a la semilla}; no realizamos un barrido exhaustivo que pudiera rescatar
-algunas semillas colapsadas.
+\textbf{sensibilidad a la seed}; no realizamos un barrido exhaustivo que pudiera rescatar
+algunas seeds colapsadas.
 
 \section{Conclusi\'on}
 Un agente privilegiado con percepci\'on limpia de la calzada resuelve la tarea ($97\%$), y
-\emph{destilarlo} a visi\'on pura recupera ese desempe\~no sin p\'erdida significativa
-($95.5\%$, $p = 1.0$) y con mejor tiempo de vuelta. Entrenar la misma visi\'on con RL directo es
+\emph{destilarlo} a un agente de visi\'on recupera ese desempe\~no ($95.5\%$; una diferencia de $1.5$
+puntos, sin evidencia de superioridad de ninguno) y con mejor tiempo de vuelta. Entrenar la misma visi\'on con RL directo es
 poco confiable, y la temporalidad la empeora. La randomizaci\'on del fondo y la saliencia
 confirman que la ventaja es de \emph{invarianza al entorno}: la destilada mira la calzada, no el
 horizonte. La lectura general es que el l\'imite de la visi\'on-RL no es la \emph{capacidad} de
