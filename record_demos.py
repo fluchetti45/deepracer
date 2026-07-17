@@ -1,18 +1,18 @@
 # Graba videos demo de los modelos, UNO DETRAS DE OTRO, cada uno en la rama que le
 # corresponde (switch de git automatico), igual que run_all_evals pero grabando el
-# viewport 3D de Webots en vez de solo medir. Por cada modelo graba las DOS pistas de
-# test (track9, track10) con --laps vueltas cada una; los mp4 quedan en --record-dir
-# con nombre <variante>_s<seed>_<track>_<laps>laps.mp4.
+# viewport 3D de Webots en vez de solo medir. Por defecto graba UNA vuelta en UNA pista
+# (track9) por modelo: cuando completa la vuelta, cierra el mp4 y pasa al siguiente. Los
+# mp4 quedan en --record-dir con nombre <variante>_s<seed>_<track>_<laps>laps.mp4.
 #
 # Requiere: Webots (se lanza CON render), working tree LIMPIO (hace git checkout), y que
 # la rama de cada modelo tenga el soporte de grabacion (movie handlers + --record-movie).
 # NO pisa el eval del paper (--record-movie implica --no-save-results).
 #
 # Uso:
-#   python record_demos.py --discover                    # 5 variantes, seed 0, ambos mapas
-#   python record_demos.py --discover --seed 0 --laps 3
-#   python record_demos.py --models 20260706164309 20260706221752 ...
-#   python record_demos.py --discover --randomize-background   # fondo aleatorio (robustez)
+#   python record_demos.py --discover                        # 6 variantes, seed 0, 1 vuelta en track9
+#   python record_demos.py --discover --track track10.png    # una vuelta en la otra pista
+#   python record_demos.py --discover --track all --laps 3   # las 2 pistas, 3 vueltas c/u
+#   python record_demos.py --models 20260713120404 20260714162646 ...
 
 import argparse
 import glob
@@ -23,6 +23,7 @@ import sys
 
 VARIANT_BRANCH = {
     "vision_1frame": "master",
+    "vision_camonly": "master",
     "vision_stacked": "master",
     "geometrica": "geometrica",
     "vision_lstm": "vision_lstm",
@@ -110,19 +111,26 @@ def parse_args():
     p.add_argument("--discover", action="store_true",
                    help="Auto-descubrir 1 modelo por variante (seed --seed).")
     p.add_argument("--variants", nargs="+",
-                   default=["vision_1frame", "vision_stacked", "vision_lstm",
-                            "geometrica", "vision_distill"],
+                   default=["vision_1frame", "vision_camonly", "vision_stacked",
+                            "vision_lstm", "geometrica", "vision_distill"],
                    help="Variantes a grabar con --discover.")
     p.add_argument("--seed", type=int, default=0, help="Seed a grabar (--discover).")
     p.add_argument("--models-dir", default="models")
     p.add_argument("--record-dir", default="videos",
                    help="Carpeta de salida de los mp4.")
-    p.add_argument("--laps", type=int, default=3, help="Vueltas por mapa (default 3).")
+    p.add_argument("--track", default="track9.png",
+                   help="Pista a grabar (una sola). Con '' o 'all' graba TODAS las de eval. "
+                        "Default: track9.png (una vuelta en una pista por modelo).")
+    p.add_argument("--laps", type=int, default=1, help="Vueltas a grabar por modelo (default 1).")
     p.add_argument("--device", default="cpu")
     p.add_argument("--eval-seed", type=int, default=0,
                    help="Seed de reset (spawn+fondo) para que todos arranquen igual. Default 0.")
     p.add_argument("--randomize-background", action="store_true",
                    help="Fondo aleatorio por episodio (test de robustez). Default: fondo fijo.")
+    p.add_argument("--checkout", action="store_true",
+                   help="Cambiar de rama por modelo (comportamiento viejo). Por defecto graba "
+                        "TODO en la rama actual (master) cargando cada policy; el geometrico se "
+                        "saltea porque su obs de features no se calcula en master.")
     return p.parse_args()
 
 
@@ -130,17 +138,39 @@ def record_cmd(args, model_dir):
     cmd = [sys.executable, "-m", "rl.evaluate", "--model", model_dir,
            "--laps", str(args.laps), "--record-movie", args.record_dir,
            "--device", args.device, "--eval-seed", str(args.eval_seed)]
+    # Una sola pista por modelo (default): graba una vuelta y pasa al siguiente. Con
+    # --track '' o 'all' se omite y evaluate graba TODAS las pistas de eval.
+    if args.track and args.track.lower() != "all":
+        cmd += ["--track", args.track]
     if args.randomize_background:
         cmd += ["--randomize-background"]
     return cmd
 
 
+def run_record(args, model_dir, variant):
+    """Graba un modelo. Para vision_camonly setea CAMERA_ONLY=1 (obs = solo imagen) en el
+    subprocess; subprocess.run hereda os.environ. Restaura el valor previo al terminar."""
+    prev = os.environ.get("CAMERA_ONLY")
+    if variant == "vision_camonly":
+        os.environ["CAMERA_ONLY"] = "1"
+    else:
+        os.environ.pop("CAMERA_ONLY", None)
+    try:
+        return sh(record_cmd(args, model_dir), check=False)
+    finally:
+        if prev is None:
+            os.environ.pop("CAMERA_ONLY", None)
+        else:
+            os.environ["CAMERA_ONLY"] = prev
+
+
 def main():
     args = parse_args()
-    if tracked_changes():
+    # El working tree limpio solo hace falta si vamos a cambiar de rama (--checkout).
+    if args.checkout and tracked_changes():
         raise SystemExit(
             "Hay cambios en archivos trackeados -> commitea/limpia antes de lanzar "
-            "(el script hace git checkout entre ramas)."
+            "con --checkout (hace git checkout entre ramas)."
         )
 
     models = args.models
@@ -154,35 +184,49 @@ def main():
         for mm in models:
             print(f"    {os.path.basename(mm)}")
 
-    # Resolver cada modelo -> (dir, rama) y agrupar por rama preservando el orden.
-    order, groups, labels = [], {}, {}
-    for m in models:
-        d = resolve_model_dir(m, args.models_dir)
-        branch, variant = resolve_branch(d)
-        if branch not in groups:
-            groups[branch] = []
-            order.append(branch)
-        groups[branch].append(d)
-        labels[d] = variant or os.path.basename(d)
-
     os.makedirs(args.record_dir, exist_ok=True)
     origin = current_branch()
+    resolved = [(resolve_model_dir(m, args.models_dir),) for m in models]
+    resolved = [(d, resolve_branch(d)[1]) for (d,) in resolved]  # (dir, variant)
     results = []
-    try:
-        for branch in order:
-            print("#" * 72)
-            print(f"# RAMA {branch}  ({len(groups[branch])} modelo/s)")
-            print("#" * 72, flush=True)
-            sh(["git", "checkout", branch])
-            for model_dir in groups[branch]:
-                print(f"\n----- grabando {labels[model_dir]}  "
-                      f"({os.path.basename(model_dir)}) -----", flush=True)
-                code = sh(record_cmd(args, model_dir), check=False)
-                results.append((labels[model_dir], os.path.basename(model_dir), branch,
-                                "ok" if code == 0 else f"fallo({code})"))
-    finally:
-        print(f"\nVolviendo a la rama original: {origin}")
-        sh(["git", "checkout", origin], check=False)
+
+    if not args.checkout:
+        # ---- DEFAULT: todo en la rama actual (master), sin git checkout ----
+        # Los modelos de vision (imagen; incl. LSTM y camera-only) cargan y corren aca.
+        # El geometrico NO: su obs de 9 features no la produce el env de master.
+        print(f"# Grabando en la rama actual ({origin}) sin cambiar de rama.")
+        for model_dir, variant in resolved:
+            rid = os.path.basename(model_dir)
+            if variant == "geometrica" and origin != "geometrica":
+                print(f"\n[skip] {variant} ({rid}): su obs de features no existe en "
+                      f"'{origin}'. Grabalo con --checkout, o parado en la rama geometrica.")
+                results.append((variant, rid, origin, "salteado (obs no disponible)"))
+                continue
+            print(f"\n----- grabando {variant}  ({rid}) -----", flush=True)
+            code = run_record(args, model_dir, variant)
+            results.append((variant, rid, origin, "ok" if code == 0 else f"fallo({code})"))
+    else:
+        # ---- Viejo: cada modelo en su rama (git checkout), agrupado por rama ----
+        groups, vmap = {}, {}
+        for model_dir, variant in resolved:
+            branch = resolve_branch(model_dir)[0]
+            groups.setdefault(branch, []).append(model_dir)
+            vmap[model_dir] = variant
+        order = list(dict.fromkeys(resolve_branch(d)[0] for d, _ in resolved))
+        try:
+            for branch in order:
+                print("#" * 72)
+                print(f"# RAMA {branch}  ({len(groups[branch])} modelo/s)")
+                print("#" * 72, flush=True)
+                sh(["git", "checkout", branch])
+                for model_dir in groups[branch]:
+                    variant = vmap[model_dir]; rid = os.path.basename(model_dir)
+                    print(f"\n----- grabando {variant}  ({rid}) -----", flush=True)
+                    code = run_record(args, model_dir, variant)
+                    results.append((variant, rid, branch, "ok" if code == 0 else f"fallo({code})"))
+        finally:
+            print(f"\nVolviendo a la rama original: {origin}")
+            sh(["git", "checkout", origin], check=False)
 
     print("#" * 72)
     print("RESUMEN DE GRABACION")
