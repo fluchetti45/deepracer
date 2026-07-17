@@ -72,7 +72,7 @@ $97.0\%$ de vueltas completadas--- y es la \textbf{\'unica variante de visi\'on 
 seeds convergen), mientras completa la vuelta en \textbf{menos pasos de control}; entrenar la
 visi\'on directamente con RL es inestable ---algunas seeds colapsan--- y
 agregar estructura temporal (apilado, recurrencia) \emph{empeora} el desempe\~no. Mapas de
-saliencia por \emph{guided backprop} muestran que la destilaci\'on desplaza la atenci\'on de
+saliencia por \emph{oclusi\'on} muestran que la destilaci\'on desplaza la atenci\'on de
 la CNN del fondo hacia la calzada, lo que explica su invarianza al entorno. Concluimos que el
 cuello de botella de la visi\'on-RL no es la \emph{capacidad} de la representaci\'on sino la
 \emph{asignaci\'on de cr\'edito} a trav\'es de p\'ixeles en un problema parcialmente
@@ -371,23 +371,25 @@ La destilada es supervisada y no aparece en estas curvas de RL.}
 \end{figure}
 
 \section{An\'alisis: qu\'e mira la CNN}
-Para entender \emph{por qu\'e} la destilaci\'on funciona, calculamos saliencia por
-\emph{guided backprop}~\cite{springenberg2015guided}: el gradiente de la decisi\'on (valor del
-cr\'itico $V(s)$ y \emph{steering}) respecto de los p\'ixeles de entrada. Crucialmente, la
-saliencia se computa \textbf{sobre el mismo frame que se muestra} ---una curva--- y no como un
-promedio sobre frames distintos, que mezclar\'ia rectas y curvas. La Fig.~\ref{fig:saliency}
-compara las cuatro variantes de visi\'on (todas seed $0$).
+Para entender \emph{por qu\'e} la destilaci\'on funciona, medimos la \emph{sensibilidad por
+oclusi\'on}~\cite{zeiler2014occlusion}: tapamos cada regi\'on de la imagen con un parche gris y
+medimos cu\'anto cambia el \emph{steering} (el diferencial de ruedas que gobierna el giro). Donde
+tapar cambia m\'as la decisi\'on, m\'as depende la pol\'itica de esa regi\'on. A diferencia de los
+m\'etodos de gradiente (guided backprop, \emph{integrated gradients}), la oclusi\'on mide el efecto
+\emph{causal} sobre la salida; usamos el \emph{steering} ---no el valor $V(s)$--- porque en la
+destilada la cabeza de valor no se entrena (la clonaci\'on solo ajusta la acci\'on). La
+Fig.~\ref{fig:saliency} compara las cuatro variantes de visi\'on (seed $0$).
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=\columnwidth]{figures/fig_saliency.png}
-\caption{Saliencia por \emph{guided backprop} sobre una misma curva. Las tres variantes
-de visi\'on-RL (1 frame, apilada, LSTM) encienden la saliencia en una franja sobre el
-\textbf{horizonte} ---la pared y las monta\~nas del fondo---: usan el entorno, constante en
-entrenamiento, como atajo. La \textbf{destilada} desplaza la atenci\'on hacia \emph{abajo},
-sobre la calzada y el borde curvo del carril, con el horizonte apagado: hereda del maestro
-geom\'etrico \emph{qu\'e mirar}. Dentro de cada modelo, \emph{value} y \emph{steer} coinciden
-porque comparten el extractor CNN.}
+\caption{Sensibilidad del \emph{steering} por oclusi\'on sobre una curva. Las variantes de
+visi\'on-RL (1 frame, apilada, LSTM) concentran la sensibilidad en la franja del \textbf{horizonte}
+---el borde entre la calzada y el fondo (pared y monta\~nas)---, del que dependen como atajo: solo
+el $26$--$41\%$ de la sensibilidad cae sobre la calzada. La \textbf{destilada} invierte el patr\'on:
+el $66\%$ cae sobre la \textbf{calzada} y el borde curvo del carril, heredando del maestro geom\'etrico
+\emph{qu\'e mirar}. (Porcentaje promediado sobre frames de curva held-out; el mapa es un frame
+representativo.)}
 \label{fig:saliency}
 \end{figure}
 

@@ -131,17 +131,19 @@ de arriba (no con Mann-Whitney: un *p* alto no prueba igualdad).
 
 ## Por qué funciona: la CNN deja de mirar el fondo
 
-Guided backprop (qué píxeles mueven la decisión) calculado **sobre este mismo frame** —una curva— para el
-**valor del crítico** V(s) y para el **steering**, en las cuatro variantes de visión (todas seed 0). La
-saliencia corresponde exactamente a la imagen mostrada (no es un promedio).
+**Sensibilidad por oclusión**: tapamos cada región de la imagen con un parche gris y medimos cuánto cambia
+el **steering** (diferencial de ruedas que gobierna el giro). Donde tapar cambia más la decisión, más depende
+la política de esa región. Usamos oclusión (efecto *causal* sobre la salida, más fiel que guided backprop o
+integrated gradients) y el *steering* —no el valor V(s)— porque en la destilada la cabeza de valor no se
+entrena (la BC solo ajusta la acción).
 
-![Saliencia de las cuatro variantes de visión](docs/img/fig_saliency.png)
+![Saliencia por oclusión de las cuatro variantes de visión](docs/img/fig_saliency.png)
 
-**Las tres variantes de visión-RL** (1 frame, stacked, LSTM) encienden la saliencia en una **franja sobre el
-horizonte** —el muro y las montañas del fondo—: usan el entorno, constante en entrenamiento, como atajo.
-**La destilada** desplaza la atención hacia **abajo, sobre la calzada y el borde curvo del carril**, con el
-horizonte apagado: hereda del maestro geométrico *qué mirar*. Por eso se sostiene bajo randomización del
-fondo. Dentro de cada modelo, **value** y **steer** coinciden (comparten el extractor CNN).
+**Las tres variantes de visión-RL** (1 frame, stacked, LSTM) concentran la sensibilidad en la **franja del
+horizonte** —el borde entre la calzada y el fondo (muro y montañas)—: solo el **26–41 %** de la sensibilidad
+cae sobre la calzada. **La destilada invierte el patrón**: el **66 % cae sobre la calzada** y el borde curvo
+del carril, heredando del maestro geométrico *qué mirar*. Por eso se sostiene bajo randomización del fondo.
+(Porcentaje promediado sobre frames de curva held-out; el mapa es un frame representativo.)
 
 ### Curvas de aprendizaje
 
