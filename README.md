@@ -25,10 +25,10 @@ cuerpo, del ground-truth del simulador); lo único que cambia entre ellas es **c
 (features explícitas vs imagen cruda). La política de visión es *MultiInput*: NatureCNN sobre la imagen +
 un MLP sobre la velocidad.
 
-Sobre pistas *held-out* y con **randomización del fondo**, el agente destilado **alcanza al maestro
-privilegiado** —95.5 % vs 97.0 % de vueltas completadas, una diferencia pequeña y sin evidencia de
-superioridad de ninguno— y lo **supera en tiempo de vuelta**, mientras que entrenar la visión directamente
-con RL es **inestable**, y
+Sobre pistas *held-out* y con **randomización del fondo**, el agente destilado **se acerca al maestro
+privilegiado** —92.5 % vs 97.0 % de vueltas completadas, una brecha pequeña de ~5 puntos— y es la
+**única variante de visión estable** (las cinco seeds convergen), completando la vuelta en **menos pasos
+de control**; entrenar la visión directamente con RL es **inestable** —algunas seeds colapsan— y
 agregar estructura temporal (stacking, recurrencia) **la empeora**. Mapas de saliencia muestran que la
 destilación **desplaza la atención de la CNN del fondo hacia la calzada**, lo que explica su invarianza al
 entorno.
@@ -53,8 +53,8 @@ flowchart LR
     CAM -.-> RL["Visión-RL<br/>PPO desde reward"]
     T --> D["Colecta con DART<br/>img → acción · ~55k pares · σ=0.15"]
     D --> S["Estudiante de visión<br/>clonación (BC) · CNN 1 frame"]
-    S --> OUT["Visión destilada<br/>95.5 % vueltas ✓"]
-    RL -.-> BAD["Frágil ✗<br/>≤ 83 % · sobreajusta el fondo"]
+    S --> OUT["Visión destilada<br/>92.5 % vueltas ✓"]
+    RL -.-> BAD["Inestable ✗<br/>10–90 % · sobreajusta el fondo"]
 
     classDef ours fill:#0E8C79,stroke:#0E8C79,color:#ffffff;
     classDef good fill:#DFF0EA,stroke:#0E8C79,color:#0C6E56;
@@ -73,7 +73,7 @@ flowchart LR
 | **Visión apilada (4)** | visión-RL | Cuatro frames apilados para dar información temporal. |
 | **Visión + LSTM** | visión-RL | Política recurrente: la memoria la aporta el LSTM en vez del stacking. |
 | **Visión destilada** | destilado (BC) | CNN de 1 frame entrenada por clonación para imitar al maestro geométrico. |
-| **Visión solo cámara** *(ablación)* | visión-RL | Igual a *Visión 1 frame* pero **sin** la propiocepción de velocidad: obs = solo imagen. Aísla cuánto aporta esa velocidad de 2D. |
+| **Visión pura (cámara)** *(ablación)* | visión-RL | Igual a *Visión 1 frame* pero **sin** la propiocepción de velocidad: obs = solo imagen. Aísla cuánto aporta esa velocidad de 2D. |
 
 ---
 
@@ -81,30 +81,31 @@ flowchart LR
 
 Evaluación sobre **dos pistas held-out** (`track9`, `track10`) con **fondo aleatorio** y semilla de
 evaluación fija (todos los modelos ven exactamente los mismos episodios). Métrica: fracción de vueltas
-completadas. **5 seeds por variante** (25 modelos en total).
+completadas. **5 seeds por variante** (30 modelos en total).
 
 Valores: **IQM (media intercuartil) con IC del 95 % por _bootstrap_ de percentil** (2×10⁴ remuestreos)
-sobre 5 seeds, en formato `IQM [IC 95%]`. El tiempo de vuelta se omite (—) en las variantes que rara vez
-completan vueltas.
+sobre 5 seeds, en formato `IQM [IC 95%]`. La rapidez se mide en **pasos de control por vuelta** (no en
+segundos, que dependen de la velocidad de simulación) y es *condicional a completar la vuelta*.
 
-| Variante | Régimen | Lap rate (%) | Off-track (%) | Tiempo vuelta (s) | Reward/ep |
+| Variante | Régimen | Lap rate (%) | Off-track (%) | Pasos/vuelta | Reward/ep |
 |---|---|--:|--:|--:|--:|
-| **Geométrica** | privilegiado (RL) | **98.3** [92.5, 100] | 1.7 [0, 7.5] | 173 [167, 205] | 539 [513, 548] |
-| **Visión destilada** | destilado (BC) | **97.5** [87.5, 100] | 2.5 [0, 9.2] | **154** [145, 188] | 490 [439, 512] |
-| Visión (1 frame) | visión-RL | 88.3 [68.3, 91.7] | 6.7 [1.7, 13.3] | 201 [164, 226] | 406 [380, 435] |
-| Visión apilada (4) | visión-RL | 60.8 [15.8, 96.7] | 28.3 [0.8, 67.5] | — | 365 [335, 460] |
-| Visión + LSTM | visión-RL | 34.2 [1.7, 76.7] | 51.7 [23.3, 78.3] | — | 278 [241, 332] |
-| Visión solo cámara *(ablación)* | visión-RL | *TBD* | *TBD* | *TBD* | *TBD* |
+| **Geométrica** | privilegiado (RL) | **97.5** [93, 100] | 1.7 [0, 5.8] | 983 [975, 1036] | 179 [174, 184] |
+| **Visión destilada** | destilado (BC) | **92.5** [87, 98] | 7.5 [1.7, 13.3] | **766** [751, 807] | 139 [131, 143] |
+| Visión (1 frame) | visión-RL | 90.0 [67, 97] | 7.5 [0.8, 33.3] | 769 [684, 818] | 134 [88, 173] |
+| Visión pura (cámara) *(ablación)* | visión-RL | 75.0 [26, 91] | 19.2 [1.7, 70.0] | 851 [689, 940] | 126 [71, 185] |
+| Visión apilada (4) | visión-RL | 66.7 [21, 89] | 23.3 [5.8, 52.5] | 740 [561, 963] | 140 [96, 195] |
+| Visión + LSTM | visión-RL | 69.2 [33, 89] | 30.8 [9.2, 66.7] | 697 [639, 762] | 82 [45, 106] |
 
-<sub>La fila **Visión solo cámara** es una **ablación en curso** (obs = solo imagen, sin la propiocepción de
-velocidad): mide cuánto aporta esa velocidad de 2D que comparten las demás variantes. Los datos se completan
-al terminar el entrenamiento de sus 5 seeds.</sub>
+<sub>**Visión pura (cámara)** es la ablación sin propiocepción (obs = solo imagen): baja el lap rate de 90.0
+a 75.0 y más que duplica el off-track vs *Visión 1 frame* — incluso la visión más simple se apoya en la
+velocidad propioceptiva como muleta.</sub>
 
-> **La visión destilada alcanza al maestro privilegiado** en lap rate (IQM 97.5 % vs 98.3 %; +1.5 puntos,
-> con ICs bootstrap del 95 % ampliamente solapados). Un test de equivalencia **TOST a ±5 puntos no es
-> concluyente con n=5** (p<sub>TOST</sub>=0.18): *no detectamos diferencia*, pero con cinco seeds no se
-> puede *demostrar* equivalencia estricta —haría falta un margen práctico de ±8 puntos, o del orden de
-> 20–30 seeds. Con esa cautela, es **el conductor confiable más rápido**.
+> **La visión destilada se acerca al maestro privilegiado** y es la **única variante de visión estable**:
+> IQM 92.5 % vs 97.5 % (~5 puntos), pero con IC bootstrap del 95 % **angosto** ([87, 98]) frente a los de la
+> visión-RL, que abarcan casi todo el rango (apilada [21, 89], LSTM [33, 89]). El **TOST a ±5 puntos no es
+> concluyente con n=5** (p<sub>TOST</sub>=0.43; IC 90 % de la diferencia [−1.1, +10.1]): hay una brecha
+> pequeña pero real de ~5 puntos —la destilada hereda el techo del maestro sin igualarlo punto por punto—.
+> Aun así es **el conductor confiable más rápido**: completa la vuelta en menos pasos (766 vs 983).
 
 ![Lap rate held-out por variante](docs/img/fig_eval_lap_rate.png)
 
@@ -115,14 +116,14 @@ otras colapsan. La destilación (y el maestro) rinden parejo en las 5.
 
 | Variante | seed 0 | seed 1 | seed 2 | seed 3 | seed 4 |
 |---|--:|--:|--:|--:|--:|
-| Geométrica | 100 | 98 | 98 | 90 | 100 |
-| Visión destilada | 100 | 92 | 100 | 100 | 85 |
-| Visión (1 frame) | 90 | 92 | 60 | 90 | 85 |
-| Visión apilada (4) | 38 | 90 | 5 | 55 | 100 |
-| Visión + LSTM | 5 | 65 | 0 | 32 | 82 |
-| Visión solo cámara *(ablación)* | — | — | — | — | — |
+| Geométrica | 93 | 98 | 100 | 95 | 100 |
+| Visión destilada | 90 | 95 | 85 | 100 | 93 |
+| Visión (1 frame) | 90 | 95 | 58 | 98 | 85 |
+| Visión pura (cámara) *(ablación)* | 58 | 80 | 10 | 88 | 93 |
+| Visión apilada (4) | 63 | 98 | 73 | 0 | 65 |
+| Visión + LSTM | 45 | 28 | 93 | 80 | 83 |
 
-La enorme varianza de apilada y LSTM (de 5 a 100, de 0 a 82) es el síntoma: la temporalidad agrega
+La enorme varianza de apilada y LSTM (apilada de 0 a 98, LSTM de 28 a 93) es el síntoma: la temporalidad agrega
 **dificultad de optimización**, no desempeño. La equivalencia Geométrica–Destilada se evalúa con el **TOST**
 de arriba (no con Mann-Whitney: un *p* alto no prueba igualdad).
 
@@ -155,7 +156,7 @@ el geométrico converge parejo. La destilada es supervisada (no aparece en estas
 
 ## Setup experimental
 
-Las cinco variantes comparten todo salvo la observación. Adoptamos **PPO** por su estabilidad y eficiencia
+Las seis variantes comparten todo salvo la observación. Adoptamos **PPO** por su estabilidad y eficiencia
 demostradas en control continuo y navegación autónoma. Hiperparámetros reales de los runs finales
 (`models/<id>/run_metadata.json`):
 
@@ -221,7 +222,7 @@ python -m rl.run_experiment --seeds 0 1 2 3 4 --total-timesteps 1000000 --n-stac
 git checkout vision_distill
 python run_all_distill.py --seeds 0 1 2 3 4        # colecta (limpio+DART) + BC por seed
 
-# 5. Evaluar los 25 modelos con fondo aleatorio y misma secuencia de episodios
+# 5. Evaluar los 30 modelos con fondo aleatorio y misma secuencia de episodios
 python run_all_evals.py --discover --episodes 20 --randomize-background --eval-seed 0
 ```
 
@@ -234,17 +235,21 @@ Cada corrida genera `models/<timestamp>/` con `final_model.zip`, `vecnormalize.p
 `run_metadata.json`. El análisis se corre desde `analysis/`:
 
 ```powershell
-python -m analysis.run_analysis      # descubre runs + results_summary.{json,md} + curvas
-python -m analysis.robust_stats      # IQM [IC 95% bootstrap] + TOST (incluye la ablación camera-only)
+python -m analysis.run_analysis --since 20260713   # descubre runs + results_summary.{json,md} + curvas
+python -m analysis.fig_eval                          # barras de lap rate (fig_eval_lap_rate.png)
+python -m analysis.robust_stats                      # IQM [IC 95% bootstrap] + TOST (incluye camera-only)
 ```
+
+<sub>`--since 20260713` se queda solo con la tanda final (config de mayor velocidad); sin él, `discover`
+agruparía esas corridas con tandas previas del mismo largo (1M pasos), que el guard de timesteps no distingue.</sub>
 
 ---
 
 ## Conclusiones
 
 - Un agente **privilegiado** con percepción limpia de la calzada resuelve la tarea (97 %).
-- **Destilarlo a un agente de visión** recupera ese desempeño (95.5 %; una diferencia de 1.5 puntos, sin
-  evidencia de superioridad de ninguno) y con mejor tiempo de vuelta — el estudiante de píxeles le gana la vuelta al maestro.
+- **Destilarlo a un agente de visión** recupera casi ese desempeño (92.5 %; una brecha de ~5 puntos) con la
+  ventaja decisiva de ser la **única variante de visión estable**, y completando la vuelta en menos pasos de control.
 - Entrenar la **misma visión con RL directo** es poco confiable, y **la temporalidad la empeora**: stacking
   y recurrencia desestabilizan la optimización (KL disparado, crítico colapsado) en vez de ayudar.
 - **Lectura:** el límite de la visión-RL no es la *capacidad* de la representación, sino la *asignación de

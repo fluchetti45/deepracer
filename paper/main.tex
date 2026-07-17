@@ -59,18 +59,18 @@ destilaci\'on de pol\'iticas para conducci\'on aut\'onoma en simulaci\'on}
 \raggedbottom
 
 \begin{abstract}
-Comparamos cinco representaciones de la observaci\'on para un agente de conducci\'on
+Comparamos seis representaciones de la observaci\'on para un agente de conducci\'on
 aut\'onoma entrenado con PPO en el simulador Webots. Manteniendo
 \emph{id\'enticos} el entorno, la recompensa, el presupuesto de entrenamiento (1M de pasos)
 y la configuraci\'on del algoritmo, variamos \'unicamente la observaci\'on: un agente
-geom\'etrico \emph{privilegiado} (features de calzada extra\'idas de la c\'amara), tres
-agentes de visi\'on entrenados con RL (un frame, cuatro frames apilados, y una
-pol\'itica recurrente con LSTM), y un agente de visi\'on \emph{destilado} del geom\'etrico
-por clonaci\'on de comportamiento. Sobre pistas no vistas y con randomizaci\'on del fondo,
-el agente destilado \textbf{alcanza al maestro privilegiado} ---$95.5\%$ frente a $97.0\%$
-de vueltas completadas, una diferencia peque\~na y sin evidencia de superioridad de ninguno--- y
-lo \textbf{supera en tiempo de vuelta}, mientras que entrenar la visi\'on directamente con RL es
-inestable y
+geom\'etrico \emph{privilegiado} (features de calzada extra\'idas de la c\'amara), cuatro
+agentes de visi\'on entrenados con RL (un frame, un frame \emph{sin propiocepci\'on}, cuatro
+frames apilados y una pol\'itica recurrente con LSTM), y un agente de visi\'on \emph{destilado}
+del geom\'etrico por clonaci\'on de comportamiento. Sobre pistas no vistas y con randomizaci\'on
+del fondo, el agente destilado \textbf{se acerca al maestro privilegiado} ---$92.5\%$ frente a
+$97.0\%$ de vueltas completadas--- y es la \textbf{\'unica variante de visi\'on estable} (las cinco
+seeds convergen), mientras completa la vuelta en \textbf{menos pasos de control}; entrenar la
+visi\'on directamente con RL es inestable ---algunas seeds colapsan--- y
 agregar estructura temporal (apilado, recurrencia) \emph{empeora} el desempe\~no. Mapas de
 saliencia por \emph{guided backprop} muestran que la destilaci\'on desplaza la atenci\'on de
 la CNN del fondo hacia la calzada, lo que explica su invarianza al entorno. Concluimos que el
@@ -102,12 +102,12 @@ la recompensa, el estudiante de visi\'on imita las decisiones de un maestro que 
 calzada de forma limpia ---heredando \emph{qu\'e mirar}--- siguiendo la l\'inea de
 \emph{Learning by Cheating}~\cite{chen2019lbc}.
 
-Nuestra contribuci\'on es un estudio controlado, con $5$ seeds por modelo ($25$
+Nuestra contribuci\'on es un estudio controlado, con $5$ seeds por modelo ($30$
 modelos en total), que aisla el efecto de la \emph{representaci\'on de la observaci\'on},
-dejando todo lo dem\'as fijo. Mostramos que (i) la visi\'on destilada iguala
-estad\'isticamente al maestro privilegiado; (ii) la visi\'on-RL directa es poco confiable y la
-temporalidad la empeora; y (iii) la saliencia confirma que la ventaja es de invarianza al
-entorno.
+dejando todo lo dem\'as fijo. Mostramos que (i) la visi\'on destilada se acerca al maestro
+privilegiado y es la \'unica variante de visi\'on \emph{confiable} (baja varianza entre seeds);
+(ii) la visi\'on-RL directa es una loter\'ia entre seeds y la temporalidad la empeora; y (iii) la
+saliencia confirma que la ventaja es de invarianza al entorno.
 
 \section{Trabajo relacionado}
 La \textbf{destilaci\'on de un agente privilegiado} a uno de visi\'on es la base directa de
@@ -123,7 +123,7 @@ PPO~\cite{schulman2017ppo} y el extractor visual es la NatureCNN~\cite{mnih2015d
 escenario est\'a inspirado en la plataforma AWS DeepRacer~\cite{balaji2020deepracer}.
 
 \section{M\'etodo}
-Las cinco variantes comparten entorno, recompensa, presupuesto ($10M$ pasos) y configuraci\'on
+Las seis variantes comparten entorno, recompensa, presupuesto ($1M$ pasos) y configuraci\'on
 de PPO; \textbf{lo \'unico que cambia es la observaci\'on} (Tabla~\ref{tab:variants}). La
 acci\'on es un vector continuo de dos componentes ---las velocidades normalizadas de las ruedas
 izquierda y derecha (tracci\'on diferencial), cada una remapeada a $[v_{\min}, v_{\max}]$ rad/s---
@@ -131,7 +131,7 @@ y la recompensa es densa: progreso sobre la pista menos penalizaciones, computad
 imagen de c\'amara.
 
 \begin{table}[H]
-\caption{Las cinco representaciones de la observaci\'on.}
+\caption{Las seis representaciones de la observaci\'on.}
 \label{tab:variants}
 \centering
 \small
@@ -141,6 +141,7 @@ imagen de c\'amara.
 \midrule
 Geom\'etrica & privilegiado & Vector de 9 features de percepci\'on. \\
 Visi\'on 1 frame & visi\'on-RL & CNN sobre un frame RGB crudo. La variante de visi\'on m\'as simple. \\
+Visi\'on pura (c\'amara) & visi\'on-RL & CNN de 1 frame \emph{sin} la velocidad propioceptiva: solo p\'ixeles (ablaci\'on). \\
 Visi\'on apilada & visi\'on-RL & Cuatro frames apilados para dar informaci\'on temporal. \\
 Visi\'on + LSTM & visi\'on-RL & Pol\'itica recurrente: la memoria la aporta el LSTM. \\
 Visi\'on destilada & destilado (BC) & CNN de 1 frame entrenada por clonaci\'on para imitar al maestro geom\'etrico. \\
@@ -179,10 +180,10 @@ entrenamiento}.
   \node[ours, right=6mm of cam, yshift=8mm] (teach) {Maestro geom.\\PPO priv.};
   \node[ours, right=4mm of teach] (dart) {Colecta DART\\$\sim$55k pares};
   \node[ours, right=4mm of dart] (bc) {Estudiante\\BC $\cdot$ CNN};
-  \node[good, right=4mm of bc] (out) {Destilada\\95.5\%};
+  \node[good, right=4mm of bc] (out) {Destilada\\92.5\%};
   % lane baseline
   \node[box, right=6mm of cam, yshift=-8mm] (rl) {Visi\'on-RL\\PPO reward};
-  \node[bad, right=4mm of rl] (badn) {Fr\'agil\\$\leq$83\%};
+  \node[bad, right=4mm of rl] (badn) {Inestable\\10--90\%};
 
   \draw[ar] (cam.east) to[out=20,in=180] (teach.west);
   \draw[ar] (teach) -- (dart);
@@ -229,7 +230,7 @@ entrenamiento--- de la misma distribuci\'on pero con curvas m\'as cerradas.}
 \end{figure}
 
 \begin{table}[H]
-\caption{Hiperpar\'ametros de PPO (las cuatro variantes RL).}
+\caption{Hiperpar\'ametros de PPO (las cinco variantes RL).}
 \label{tab:ppo}
 \centering
 \small
@@ -267,7 +268,7 @@ Backbone & NatureCNN, 1 frame \\
 \end{table}
 
 \section{Resultados}
-Evaluamos las cinco variantes ($25$ modelos) sobre pistas no vistas con fondo aleatorio. La
+Evaluamos las seis variantes ($30$ modelos) sobre pistas no vistas con fondo aleatorio. La
 m\'etrica principal es la fracci\'on de vueltas completadas (\emph{lap rate}). La
 Tabla~\ref{tab:main} resume el desempe\~no medio y la Fig.~\ref{fig:eval} lo grafica.
 
@@ -277,21 +278,23 @@ variante. Cada columna num\'erica reporta \textbf{IQM\,[IC\,$95\%$]}: la \emph{m
 $50\%$ central de las seeds, descartando el $25\%$ mejor y el $25\%$ peor; m\'as robusta que la
 media simple frente a seeds que colapsan--- seguida, entre corchetes, de su \emph{intervalo de
 confianza del $95\%$} estimado por \emph{bootstrap} de percentil ($2\times10^{4}$ remuestreos).
-En \emph{lap rate} y \emph{reward} m\'as alto es mejor; en \emph{off-track} y \emph{tiempo de
-vuelta}, m\'as bajo. Filas resaltadas: las dos variantes que resuelven la tarea. El tiempo de
-vuelta se omite (---) donde casi no se completan vueltas.}
+En \emph{lap rate} y \emph{reward} m\'as alto es mejor; en \emph{off-track} y \emph{pasos por
+vuelta}, m\'as bajo. Medimos la rapidez en \textbf{pasos de control por vuelta} (no en segundos:
+estos dependen de la velocidad de simulaci\'on) y es \emph{condicional a completar la vuelta}.
+Filas resaltadas: las dos variantes que resuelven la tarea de forma confiable.}
 \label{tab:main}
 \centering
 \footnotesize
 \begin{tabular}{@{}llcccc@{}}
 \toprule
-\textbf{Variante} & \textbf{R\'egimen} & \textbf{Lap rate (\%)} & \textbf{Off-track (\%)} & \textbf{Tiempo vuelta (s)} & \textbf{Reward/ep} \\
+\textbf{Variante} & \textbf{R\'egimen} & \textbf{Lap rate (\%)} & \textbf{Off-track (\%)} & \textbf{Pasos/vuelta} & \textbf{Reward/ep} \\
 \midrule
-\rowcolor{goodbg} Geom\'etrica       & privilegiado (RL) & $\mathbf{98.3}\,[92.5,100]$ & $1.7\,[0,7.5]$   & $173\,[167,205]$          & $539\,[513,548]$ \\
-\rowcolor{goodbg} Visi\'on destilada & destilado (BC)     & $\mathbf{97.5}\,[87.5,100]$ & $2.5\,[0,9.2]$   & $\mathbf{154}\,[145,188]$ & $490\,[439,512]$ \\
-Visi\'on 1 frame  & visi\'on-RL & $88.3\,[68.3,91.7]$ & $6.7\,[1.7,13.3]$  & $201\,[164,226]$ & $406\,[380,435]$ \\
-Visi\'on apilada   & visi\'on-RL & $60.8\,[15.8,96.7]$ & $28.3\,[0.8,67.5]$ & ---              & $365\,[335,460]$ \\
-Visi\'on + LSTM    & visi\'on-RL & $34.2\,[1.7,76.7]$  & $51.7\,[23.3,78.3]$ & ---             & $278\,[241,332]$ \\
+\rowcolor{goodbg} Geom\'etrica       & privilegiado (RL) & $\mathbf{97.5}\,[93,100]$ & $1.7\,[0,5.8]$    & $983\,[975,1036]$        & $179\,[174,184]$ \\
+\rowcolor{goodbg} Visi\'on destilada & destilado (BC)     & $\mathbf{92.5}\,[87,98]$  & $7.5\,[1.7,13.3]$ & $\mathbf{766}\,[751,807]$ & $139\,[131,143]$ \\
+Visi\'on 1 frame   & visi\'on-RL & $90.0\,[67,97]$ & $7.5\,[0.8,33.3]$  & $769\,[684,818]$ & $134\,[88,173]$ \\
+Visi\'on pura (c\'amara) & visi\'on-RL & $75.0\,[26,91]$ & $19.2\,[1.7,70.0]$ & $851\,[689,940]$ & $126\,[71,185]$ \\
+Visi\'on apilada   & visi\'on-RL & $66.7\,[21,89]$ & $23.3\,[5.8,52.5]$ & $740\,[561,963]$ & $140\,[96,195]$ \\
+Visi\'on + LSTM    & visi\'on-RL & $69.2\,[33,89]$ & $30.8\,[9.2,66.7]$ & $697\,[639,762]$ & $82\,[45,106]$ \\
 \bottomrule
 \end{tabular}
 \end{table*}
@@ -305,28 +308,34 @@ todo, se vuelve \emph{inestable}.}
 \label{fig:eval}
 \end{figure}
 
-El hallazgo central: la \textbf{visi\'on destilada alcanza al maestro privilegiado}. La media de
-vueltas completadas es $95.5\%$ frente a $97.0\%$ (IQM $97.5\%$ vs.\ $98.3\%$; una diferencia de
-apenas $1.5$ puntos), con intervalos de confianza \emph{bootstrap} del $95\%$ ampliamente
-solapados (Tabla~\ref{tab:main}). Ahora bien, que dos intervalos se solapen no \emph{demuestra}
-que las variantes sean equivalentes; para evaluarlo de forma directa aplicamos un TOST
-(\emph{two one-sided tests}) sobre el lap rate
-por seed, con un margen de equivalencia pre-especificado de $\pm5$ puntos: con $n{=}5$ el test
-\textbf{no llega a declarar equivalencia} ($p_{\text{TOST}}=0.18$; IC del $90\%$ de la diferencia
-$[-5.2,\,+8.2]$ puntos), lo que refleja el \emph{escaso poder de cinco seeds} m\'as que una
-diferencia real: un an\'alisis de varianza muestra que el $60$--$80\%$ de la dispersi\'on es
-variabilidad \emph{entre seeds} (irreducible con m\'as episodios de evaluaci\'on), de modo que
-la equivalencia estricta solo quedar\'ia establecida bajo un margen pr\'actico m\'as laxo
-($\pm8$ puntos) o con del orden de $20$--$30$ seeds por condici\'on. En s\'intesis: no
-detectamos una diferencia y el efecto es peque\~no, pero \emph{no afirmamos equivalencia estricta}
-a $\pm5$ puntos. Con esa cautela, la destilada es adem\'as el \emph{conductor confiable m\'as
-r\'apido}: recupera la competencia del agente privilegiado partiendo solo de p\'ixeles.
+El hallazgo central: la \textbf{visi\'on destilada se acerca al maestro privilegiado y es la
+\'unica variante de visi\'on confiable}. Completa el $92.5\%$ de las vueltas (IQM $92.5\%$ frente
+a $97.5\%$ del maestro; una diferencia de $\sim5$ puntos) pero, a diferencia de las de visi\'on-RL,
+lo hace \emph{sin colapsos}: su IC \emph{bootstrap} del $95\%$ es angosto ($[87,98]$) mientras que
+los de la visi\'on-RL directa abarcan casi todo el rango (p.ej.\ apilada $[21,89]$, LSTM
+$[33,89]$). Para evaluar la cercan\'ia al maestro de forma directa aplicamos un TOST
+(\emph{two one-sided tests}) sobre el lap rate por seed, con un margen de equivalencia
+pre-especificado de $\pm5$ puntos: con $n{=}5$ el test \textbf{no llega a declarar equivalencia}
+($p_{\text{TOST}}=0.43$; IC del $90\%$ de la diferencia $[-1.1,\,+10.1]$ puntos), lo que refleja
+tanto el \emph{escaso poder de cinco seeds} como una brecha peque\~na pero real de unos $5$ puntos:
+la destilada hereda el techo del maestro pero no lo iguala punto por punto. La dispersi\'on est\'a
+dominada por la variabilidad \emph{entre seeds} (irreducible con m\'as episodios de evaluaci\'on),
+de modo que la equivalencia estricta solo quedar\'ia establecida bajo un margen m\'as laxo o con
+del orden de $20$--$30$ seeds por condici\'on. Con esa cautela, la destilada es adem\'as el
+\emph{conductor confiable m\'as r\'apido}: completa la vuelta en menos pasos de control que el
+maestro ($766$ vs.\ $983$), partiendo solo de p\'ixeles.
+
+\textbf{La propiocepci\'on importa.} Quitarle al agente de un frame las dos features de velocidad
+---dej\'andolo con \emph{solo p\'ixeles} (Visi\'on pura)--- baja el lap rate de $90.0$ a $75.0$
+(IQM) y m\'as que duplica el off-track ($7.5\!\to\!19.2$), adem\'as de agregar inestabilidad (una
+seed colapsa a $10\%$): incluso la visi\'on m\'as simple se apoya en la velocidad propioceptiva
+como muleta, y los p\'ixeles solos son un problema m\'as duro.
 
 \subsection{La visi\'on-RL es una loter\'ia; la destilaci\'on, no}
 El promedio esconde lo esencial. La Tabla~\ref{tab:seed} muestra el lap rate por seed: las
 variantes temporales son \textbf{bimodales} ---algunas seeds convergen y otras colapsan
-(de $5$ a $100$, de $0$ a $82$)--- mientras que el maestro y la destilada rinden parejo en las
-cinco. La enorme varianza de apilada y LSTM es el s\'intoma: la temporalidad agrega
+(apilada de $0$ a $98$, LSTM de $28$ a $93$)--- mientras que el maestro y la destilada rinden
+parejo en las cinco. La enorme varianza de apilada y LSTM es el s\'intoma: la temporalidad agrega
 \emph{dificultad de optimizaci\'on}, no desempe\~no. Diagn\'osticos de entrenamiento
 (divergencia de KL, \emph{explained variance} negativa del cr\'itico) confirman una
 optimizaci\'on inestable. Las curvas de entrenamiento (Fig.~\ref{fig:curves}) lo hacen visible:
@@ -341,11 +350,12 @@ la visi\'on-RL aprende m\'as lento y con bandas m\'as anchas que el maestro.
 \toprule
 \textbf{Variante} & \textbf{s0} & \textbf{s1} & \textbf{s2} & \textbf{s3} & \textbf{s4} \\
 \midrule
-Geom\'etrica       & \cellcolor{goodbg}100 & \cellcolor{goodbg}98 & \cellcolor{goodbg}98 & \cellcolor{goodbg}90 & \cellcolor{goodbg}100 \\
-Visi\'on destilada & \cellcolor{goodbg}100 & \cellcolor{goodbg}92 & \cellcolor{goodbg}100 & \cellcolor{goodbg}100 & \cellcolor{goodbg}85 \\
-Visi\'on 1 frame  & \cellcolor{goodbg}90 & \cellcolor{goodbg}92 & 60 & \cellcolor{goodbg}90 & \cellcolor{goodbg}85 \\
-Visi\'on apilada   & \cellcolor{badbg}38 & \cellcolor{goodbg}90 & \cellcolor{badbg}5 & 55 & \cellcolor{goodbg}100 \\
-Visi\'on + LSTM    & \cellcolor{badbg}5 & 65 & \cellcolor{badbg}0 & \cellcolor{badbg}32 & 82 \\
+Geom\'etrica       & \cellcolor{goodbg}93 & \cellcolor{goodbg}98 & \cellcolor{goodbg}100 & \cellcolor{goodbg}95 & \cellcolor{goodbg}100 \\
+Visi\'on destilada & \cellcolor{goodbg}90 & \cellcolor{goodbg}95 & \cellcolor{goodbg}85 & \cellcolor{goodbg}100 & \cellcolor{goodbg}93 \\
+Visi\'on 1 frame  & \cellcolor{goodbg}90 & \cellcolor{goodbg}95 & 58 & \cellcolor{goodbg}98 & \cellcolor{goodbg}85 \\
+Visi\'on pura (c\'am.) & 58 & 80 & \cellcolor{badbg}10 & \cellcolor{goodbg}88 & \cellcolor{goodbg}93 \\
+Visi\'on apilada   & 63 & \cellcolor{goodbg}98 & 73 & \cellcolor{badbg}0 & 65 \\
+Visi\'on + LSTM    & \cellcolor{badbg}45 & \cellcolor{badbg}28 & \cellcolor{goodbg}93 & 80 & 83 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -396,16 +406,17 @@ desaparecer el fondo espec\'ifico de Webots del que depende. La \textbf{familia 
 acotada} (dos pistas no vistas de la misma distribuci\'on) y la \textbf{randomizaci\'on de dominio es parcial}
 (var\'ia pared y skybox, no geometr\'ia, iluminaci\'on ni c\'amara), de modo que cierra
 \emph{este} atajo y no todos los posibles. Por construcci\'on, el \textbf{estudiante hereda el
-techo del maestro}: la mejora en tiempo de vuelta proviene de acciones m\'as suaves, no de una
+techo del maestro}: la mejora en pasos por vuelta proviene de acciones m\'as suaves, no de una
 pol\'itica estrictamente superior. Finalmente, la bimodalidad de la visi\'on-RL sugiere alta
 \textbf{sensibilidad a la seed}; no realizamos un barrido exhaustivo que pudiera rescatar
 algunas seeds colapsadas.
 
 \section{Conclusi\'on}
 Un agente privilegiado con percepci\'on limpia de la calzada resuelve la tarea ($97\%$), y
-\emph{destilarlo} a un agente de visi\'on recupera ese desempe\~no ($95.5\%$; una diferencia de $1.5$
-puntos, sin evidencia de superioridad de ninguno) y con mejor tiempo de vuelta. Entrenar la misma visi\'on con RL directo es
-poco confiable, y la temporalidad la empeora. La randomizaci\'on del fondo y la saliencia
+\emph{destilarlo} a un agente de visi\'on recupera casi ese desempe\~no ($92.5\%$; una brecha
+peque\~na de unos $5$ puntos) ---con la ventaja decisiva de ser la \'unica variante de visi\'on
+\emph{estable}--- y completando la vuelta en menos pasos de control. Entrenar la misma visi\'on
+con RL directo es poco confiable, y la temporalidad la empeora. La randomizaci\'on del fondo y la saliencia
 confirman que la ventaja es de \emph{invarianza al entorno}: la destilada mira la calzada, no el
 horizonte. La lectura general es que el l\'imite de la visi\'on-RL no es la \emph{capacidad} de
 la representaci\'on sino la \emph{asignaci\'on de cr\'edito} a trav\'es de p\'ixeles en un
