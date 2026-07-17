@@ -169,23 +169,6 @@ def parse_args():
              "Lanza Webots CON render (WEBOTS_RENDER=1) y NO escribe eval_results (implica "
              "--no-save-results). El archivo se nombra <variante>_s<seed>_<track>.mp4.",
     )
-    parser.add_argument(
-        "--record-speed", type=int, default=6,
-        help="Aceleracion CONSTANTE del video (movieStartRecording): el mp4 corre a Nx la "
-             "velocidad de simulacion, fija (no 'fastest' variable). Default 6.",
-    )
-    parser.add_argument(
-        "--record-topdown", dest="record_topdown", action="store_true", default=True,
-        help="Camara cenital (top-down) centrada sobre la pista para grabar (default ON).",
-    )
-    parser.add_argument(
-        "--no-record-topdown", dest="record_topdown", action="store_false",
-        help="Grabar con el viewpoint por defecto del world (vista 3D en angulo).",
-    )
-    parser.add_argument(
-        "--record-height", type=float, default=13.0,
-        help="Altura (Z) de la camara cenital sobre la pista. Mas alto = se ve mas. Default 13.",
-    )
     return parser.parse_args()
 
 
@@ -369,13 +352,9 @@ def evaluate_one_track(args, model, n_stack, vecnormalize_path, max_episodes, te
 
         if movie_path:
             # Arranca la grabacion (pasa el supervisor a REAL_TIME y empieza el mp4).
-            resp = nav_env.bridge.request({
-                "type": "start_recording",
-                "path": os.path.abspath(movie_path),
-                "acceleration": int(getattr(args, "record_speed", 6)),
-                "topdown": bool(getattr(args, "record_topdown", True)),
-                "height": float(getattr(args, "record_height", 13.0)),
-            })
+            resp = nav_env.bridge.request(
+                {"type": "start_recording", "path": os.path.abspath(movie_path)}
+            )
             if isinstance(resp, dict) and resp.get("type") == "error":
                 print(f"  [rec] no se pudo iniciar la grabacion: {resp.get('message')}")
 

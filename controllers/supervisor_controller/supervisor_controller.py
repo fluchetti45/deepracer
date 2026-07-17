@@ -1442,26 +1442,17 @@ class SupervisorController:
         if not path:
             return {"type": "error", "request_id": request_id,
                     "message": "start_recording sin 'path'."}
-        vid_w = int(request.get("width", 1280))
-        vid_h = int(request.get("height_px", 720))
+        width = int(request.get("width", 1280))
+        height = int(request.get("height", 720))
         quality = int(request.get("quality", 95))
-        # Aceleracion CONSTANTE del video: el mp4 corre a Nx la sim, fija (no 'fastest').
-        acceleration = max(1, int(request.get("acceleration", 1)))
-        topdown = bool(request.get("topdown", False))
-        cam_height = float(request.get("height", 13.0))
         try:
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-            # Camara cenital centrada: se ve toda la pista desde arriba. Cuadrada (la arena
-            # es cuadrada) para que el auto ocupe mas cuadro.
-            if topdown:
-                self._set_topdown_viewpoint(cam_height)
-                vid_w = vid_h = 1024
             # Renderizar en tiempo real para capturar el viewport.
             self.supervisor.simulationSetMode(Supervisor.SIMULATION_MODE_REAL_TIME)
             # Firma Webots R2025a: movieStartRecording(file, width, height, codec,
-            # quality, acceleration, caption). codec=0.
+            # quality, acceleration, caption). codec=0 y acceleration=1 (tiempo real).
             self.supervisor.movieStartRecording(
-                path, vid_w, vid_h, 0, quality, acceleration, False
+                path, width, height, 0, quality, 1, False
             )
             self.current_recording_path = path
             log_supervisor(f"[Supervisor] grabando video -> {path}", force=True)
@@ -1469,28 +1460,6 @@ class SupervisorController:
         except Exception as error:  # noqa: BLE001
             return {"type": "error", "request_id": request_id,
                     "message": f"start_recording fallo: {error}"}
-
-    def _set_topdown_viewpoint(self, cam_height):
-        """Ubica la camara mirando la pista DESDE ARRIBA, centrada en el origen (arena 8x8).
-        Requiere DEF VIEWPOINT en el .wbt. Si no esta, avisa y sigue con la vista por defecto.
-        Camara en (0,0,cam_height), eje optico -Z (mira recto hacia abajo), +Y arriba."""
-        vp = self.supervisor.getFromDef("VIEWPOINT")
-        if vp is None:
-            log_supervisor("[Supervisor] sin DEF VIEWPOINT en el world -> no puedo poner "
-                           "la camara cenital; grabo con la vista por defecto.", force=True)
-            return
-        try:
-            vp.getField("position").setSFVec3f([0.0, 0.0, float(cam_height)])
-            # Orientacion identidad: en ENU (Z arriba) la camara mira por su -Z = hacia abajo.
-            vp.getField("orientation").setSFRotation([0.0, 0.0, 1.0, 0.0])
-            fov = vp.getField("fieldOfView")
-            if fov is not None:
-                fov.setSFFloat(0.9)  # ~51 deg: entra la arena 8x8 en cuadro cuadrado
-            # Aplicar el cambio de camara antes de arrancar a grabar.
-            self.supervisor.step(self.timestep)
-            log_supervisor(f"[Supervisor] camara cenital en z={cam_height:.1f}", force=True)
-        except Exception as error:  # noqa: BLE001
-            log_supervisor(f"[Supervisor] no pude poner la camara cenital: {error}", force=True)
 
     def _handle_stop_recording_request(self, request, request_id):
         """

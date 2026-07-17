@@ -122,12 +122,6 @@ def parse_args():
                    help="Pista a grabar (una sola). Con '' o 'all' graba TODAS las de eval. "
                         "Default: track9.png (una vuelta en una pista por modelo).")
     p.add_argument("--laps", type=int, default=1, help="Vueltas a grabar por modelo (default 1).")
-    p.add_argument("--speed", type=int, default=6,
-                   help="Aceleracion CONSTANTE del video (Nx la sim, fija). Default 6.")
-    p.add_argument("--cam-height", type=float, default=13.0,
-                   help="Altura de la camara cenital sobre la pista. Default 13.")
-    p.add_argument("--no-topdown", action="store_true",
-                   help="Grabar con la vista 3D por defecto en vez de la camara cenital.")
     p.add_argument("--device", default="cpu")
     p.add_argument("--eval-seed", type=int, default=0,
                    help="Seed de reset (spawn+fondo) para que todos arranquen igual. Default 0.")
@@ -143,10 +137,7 @@ def parse_args():
 def record_cmd(args, model_dir):
     cmd = [sys.executable, "-m", "rl.evaluate", "--model", model_dir,
            "--laps", str(args.laps), "--record-movie", args.record_dir,
-           "--device", args.device, "--eval-seed", str(args.eval_seed),
-           "--record-speed", str(args.speed), "--record-height", str(args.cam_height)]
-    if args.no_topdown:
-        cmd += ["--no-record-topdown"]
+           "--device", args.device, "--eval-seed", str(args.eval_seed)]
     # Una sola pista por modelo (default): graba una vuelta y pasa al siguiente. Con
     # --track '' o 'all' se omite y evaluate graba TODAS las pistas de eval.
     if args.track and args.track.lower() != "all":
