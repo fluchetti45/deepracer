@@ -37,7 +37,7 @@ NB = 20000  # remuestreos bootstrap
 METRICS = [
     ("lap_rate", 100.0, "Lap rate (%)", True),
     ("offtrack_rate", 100.0, "Off-track (%)", False),
-    ("lap_time", 1.0, "Tiempo vuelta (s)", False),
+    ("lap_steps", 1.0, "Pasos/vuelta", False),
     ("reward", 1.0, "Reward/ep", True),
 ]
 

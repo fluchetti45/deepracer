@@ -67,22 +67,26 @@ def load_runs(run_dirs):
 def per_run_aggregates(run):
     """
     Colapsa los tracks de UNA corrida en escalares (pooled sobre episodios):
-      lap_rate_overall, reward_overall, offtrack_rate_overall, lap_time_overall.
+      lap_rate_overall, reward_overall, offtrack_rate_overall, lap_steps_overall.
     Y guarda el lap_rate por track (para la tabla por-pista).
+
+    La rapidez se mide en PASOS por vuelta (lap_steps), NO en segundos: los segundos
+    (= pasos * dt) dependen del dt/velocidad de simulacion, que vario entre corridas y
+    ramas; los pasos de control son invariantes y comparables entre variantes.
     """
     tracks = run["tracks"]
     tot_ep = sum(t["episodes"] for t in tracks)
     tot_laps = sum(t["laps"] for t in tracks)
     tot_offtrack = sum(t.get("failures", {}).get("offtrack_grass", 0) for t in tracks)
     rewards = [t["reward_ep_mean"] for t in tracks if t["reward_ep_mean"] is not None]
-    lap_times = [t["lap_time_s_mean"] for t in tracks if t.get("lap_time_s_mean") is not None]
+    lap_steps = [t["lap_steps_mean"] for t in tracks if t.get("lap_steps_mean") is not None]
 
     per_track = {t["texture"]: t["lap_rate"] for t in tracks}
     return {
         "lap_rate": (tot_laps / tot_ep) if tot_ep else 0.0,
         "reward": st.mean(rewards) if rewards else 0.0,
         "offtrack_rate": (tot_offtrack / tot_ep) if tot_ep else 0.0,
-        "lap_time": st.mean(lap_times) if lap_times else None,
+        "lap_steps": st.mean(lap_steps) if lap_steps else None,
         "per_track_lap_rate": per_track,
     }
 
@@ -157,7 +161,7 @@ def aggregate(run_dirs):
         lap = [r["agg"]["lap_rate"] for r in group]
         rew = [r["agg"]["reward"] for r in group]
         off = [r["agg"]["offtrack_rate"] for r in group]
-        lt = [r["agg"]["lap_time"] for r in group]
+        lt = [r["agg"]["lap_steps"] for r in group]
         per_track = {
             tn: [r["agg"]["per_track_lap_rate"].get(tn) for r in group]
             for tn in track_names
@@ -169,14 +173,14 @@ def aggregate(run_dirs):
             "lap_rate": dict(zip(("mean", "std"), mean_std(lap))),
             "reward": dict(zip(("mean", "std"), mean_std(rew))),
             "offtrack_rate": dict(zip(("mean", "std"), mean_std(off))),
-            "lap_time_s": dict(zip(("mean", "std"), mean_std(lt))),
+            "lap_steps": dict(zip(("mean", "std"), mean_std(lt))),
             "per_track_lap_rate": {
                 tn: dict(zip(("mean", "std"), mean_std(vals)))
                 for tn, vals in per_track.items()
             },
             "per_seed": [
                 {"seed": r["seed"], **{k: r["agg"][k] for k in
-                 ("lap_rate", "reward", "offtrack_rate", "lap_time")}}
+                 ("lap_rate", "reward", "offtrack_rate", "lap_steps")}}
                 for r in group
             ],
         }
@@ -212,7 +216,7 @@ def to_markdown(summary):
 
     # Tabla global.
     lines.append("## Desempeño global (promedio de los tracks held-out)\n")
-    lines.append("| Variante | Lap rate (%) | Reward/ep | Off-track (%) | Tiempo vuelta (s) |")
+    lines.append("| Variante | Lap rate (%) | Reward/ep | Off-track (%) | Pasos/vuelta |")
     lines.append("|---|---|---|---|---|")
     for v in VARIANT_ORDER:
         d = summary["variants"].get(v)
@@ -222,7 +226,7 @@ def to_markdown(summary):
             f"| {d['label']} | {pct(d['lap_rate']['mean'], d['lap_rate']['std'])} "
             f"| {num(d['reward']['mean'], d['reward']['std'])} "
             f"| {pct(d['offtrack_rate']['mean'], d['offtrack_rate']['std'])} "
-            f"| {num(d['lap_time_s']['mean'], d['lap_time_s']['std'])} |"
+            f"| {num(d['lap_steps']['mean'], d['lap_steps']['std'], fmt='{:.0f}')} |"
         )
     lines.append("")
 
@@ -276,6 +280,8 @@ def parse_args():
     p.add_argument("--variants", nargs="+", default=None, help="Subconjunto de variantes.")
     p.add_argument("--allow-mixed", action="store_true",
                    help="Poolear runs de distinto largo (por defecto NO, ver discover).")
+    p.add_argument("--since", default=None,
+                   help="run_id minimo (YYYYmmddHHMMSS): descarta corridas anteriores.")
     return p.parse_args()
 
 
@@ -283,7 +289,7 @@ def main():
     args = parse_args()
     runs = discover_runs(args.models_dir)
     sel, report = select_runs(runs, timesteps=args.timesteps, variants=args.variants,
-                              allow_mixed=args.allow_mixed)
+                              allow_mixed=args.allow_mixed, since=args.since)
     print("Seleccion de corridas (eval):")
     print(format_report(report))
     sel_with_eval = [r["run_dir"] for r in sel if r["has_eval"]]

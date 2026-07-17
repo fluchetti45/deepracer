@@ -93,16 +93,27 @@ def discover_runs(models_dir="models"):
     return runs
 
 
-def select_runs(runs, timesteps=None, variants=None, allow_mixed=False):
+def select_runs(runs, timesteps=None, variants=None, allow_mixed=False, since=None):
     """
     Aplica los filtros y el guard anti-mezcla. Devuelve (seleccionados, report) donde
     report = {"selected_timesteps", "excluded", "warnings", "by_variant", "eval_track_sets"}.
+
+    since: run_id minimo (inclusive). Como el run_id es la fecha de inicio (YYYYmmddHHMMSS),
+    'since=20260713' se queda solo con las corridas de esa fecha en adelante. Sirve para
+    separar una tanda nueva (p.ej. config mas rapida) de corridas viejas del mismo largo,
+    que el guard de timesteps NO distingue por si solo.
     """
     warnings = []
     sel = list(runs)
 
     if variants:
         sel = [r for r in sel if r["variant"] in set(variants)]
+
+    if since:
+        before_n = len(sel)
+        sel = [r for r in sel if r["run_id"] >= str(since)]
+        warnings.append(f"Filtro --since {since}: {len(sel)} de {before_n} corridas "
+                        f"(se excluyen las de run_id anterior).")
 
     ts_values = sorted({r["total_timesteps"] for r in sel})
     if timesteps is not None:

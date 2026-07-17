@@ -26,6 +26,9 @@ def parse_args():
     p.add_argument("--variants", nargs="+", default=None, help="Subconjunto de variantes.")
     p.add_argument("--allow-mixed", action="store_true",
                    help="Poolear runs de distinto largo (por defecto NO).")
+    p.add_argument("--since", default=None,
+                   help="run_id minimo (YYYYmmddHHMMSS): descarta corridas anteriores. "
+                        "Ej: --since 20260713 para quedarse con la tanda de config rapida.")
     return p.parse_args()
 
 
@@ -36,7 +39,7 @@ def main():
         print(f"No hay corridas con run_metadata.json en {args.models_dir}/.")
         return
     sel, report = select_runs(runs, timesteps=args.timesteps, variants=args.variants,
-                              allow_mixed=args.allow_mixed)
+                              allow_mixed=args.allow_mixed, since=args.since)
     print("=" * 72)
     print("SELECCION DE CORRIDAS")
     print(format_report(report))
