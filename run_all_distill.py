@@ -13,6 +13,9 @@
 #   3) rl.distill --data data/teacher_s<seed> --seeds <seed>                    (estudiante)
 #   4) (opcional --eval) rl.evaluate del estudiante con --randomize-background --eval-seed
 #
+# La COLECTA corre con domain randomization del fondo APAGADO por defecto (fondo fijo), asi el
+# maestro demuestra sobre un entorno estable; con --collect-dr se deja como el .env.
+#
 # NO cambia de rama: corre todo en la rama vision_distill (collect_teacher calcula las
 # features geometricas del maestro desde la RGB, y distill es supervisado).
 #
@@ -32,12 +35,23 @@ import sys
 import time
 
 
-def sh(cmd, check=True):
+def sh(cmd, check=True, env=None):
     print(">>", " ".join(str(c) for c in cmd), flush=True)
-    code = subprocess.run([str(c) for c in cmd]).returncode
+    code = subprocess.run([str(c) for c in cmd], env=env).returncode
     if check and code != 0:
         raise SystemExit(f"Comando fallo (code {code}): {' '.join(str(c) for c in cmd)}")
     return code
+
+
+def collect_env(collect_dr):
+    """os.environ para la COLECTA. Por defecto apaga el domain randomization (fondo fijo)
+    para que el maestro demuestre sobre el mismo entorno; con --collect-dr se deja como el
+    .env. El supervisor lee estas dos env vars para (des)activar la randomizacion del fondo."""
+    env = dict(os.environ)
+    if not collect_dr:
+        env["DOMAIN_RANDOMIZATION_ENABLED"] = "0"
+        env["BACKGROUND_RANDOMIZATION_ENABLED"] = "0"
+    return env
 
 
 def list_run_dirs(models_dir):
@@ -101,6 +115,9 @@ def parse_args():
     p.add_argument("--clean-noise", type=float, default=0.0)
     p.add_argument("--dart-noise", type=float, default=0.15)
     p.add_argument("--no-dart", action="store_true", help="Solo colecta limpia (sin DART).")
+    p.add_argument("--collect-dr", action="store_true",
+                   help="Dejar el domain randomization del fondo PRENDIDO en la colecta (como "
+                        "el .env). Por defecto la colecta corre con DR APAGADO (fondo fijo).")
     # --- Destilacion ---
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=256)
@@ -174,11 +191,15 @@ def main():
         print(f"# SEED {seed}  (maestro {os.path.basename(teacher_dir)}) -> {data_dir}")
         print("#" * 72, flush=True)
 
+        # Colecta con domain randomization APAGADO por defecto (fondo fijo); --collect-dr lo deja.
+        c_env = collect_env(args.collect_dr)
+        dr_txt = "DR on" if args.collect_dr else "DR off"
         # 1) colecta limpia
-        sh(collect_cmd(args, teacher_dir, data_dir, args.clean_noise, seed))
+        print(f"   [colecta {dr_txt}]", flush=True)
+        sh(collect_cmd(args, teacher_dir, data_dir, args.clean_noise, seed), env=c_env)
         # 2) colecta DART
         if not args.no_dart:
-            sh(collect_cmd(args, teacher_dir, data_dir, args.dart_noise, seed))
+            sh(collect_cmd(args, teacher_dir, data_dir, args.dart_noise, seed), env=c_env)
         # 3) destilar (capturar el run_dir nuevo)
         before = list_run_dirs(args.models_dir)
         sh(distill_cmd(args, data_dir, seed, teacher_dir))
